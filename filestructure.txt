@@ -581,6 +581,35 @@
                 |-- METADATA
                 |-- RECORD
                 |-- WHEEL
+            |-- gradio_client
+                |-- CHANGELOG.md
+                |-- client.py
+                |-- data_classes.py
+                |-- documentation.py
+                |-- exceptions.py
+                |-- package.json
+                |-- snippet.py
+                |-- templates
+                    |-- discord_chat.py
+                    |-- __pycache__
+                        |-- discord_chat.cpython-312.pyc
+                |-- types.json
+                |-- utils.py
+                |-- __init__.py
+                |-- __pycache__
+                    |-- client.cpython-312.pyc
+                    |-- data_classes.cpython-312.pyc
+                    |-- documentation.cpython-312.pyc
+                    |-- exceptions.cpython-312.pyc
+                    |-- snippet.cpython-312.pyc
+                    |-- utils.cpython-312.pyc
+                    |-- __init__.cpython-312.pyc
+            |-- gradio_client-2.6.1.dist-info
+                |-- INSTALLER
+                |-- METADATA
+                |-- RECORD
+                |-- REQUESTED
+                |-- WHEEL
             |-- h11
                 |-- py.typed
                 |-- _abnf.py
@@ -3368,3 +3397,4 @@
 |-- tests
     |-- test_core.py
     |-- __init__.py
+|-- test_huggingface.py
