@@ -7,6 +7,11 @@ sdk: gradio
 app_file: space_app.py
 python_version: 3.12
 startup_duration_timeout: 1h
+short_description: AI-assisted facility image scope validation and maintenance assessment.
+tags:
+  - vision-language-model
+  - facility-maintenance
+  - university
 models:
   - Qwen/Qwen3-VL-2B-Instruct
 preload_from_hub:
@@ -134,14 +139,9 @@ computer rather than Postman or FastAPI.
 ## Hugging Face deployment
 
 This repository is configured as a Gradio Space through the YAML block at the
-top of this file.
-
-1. Create a new Hugging Face Space.
-2. Select **Gradio** as the SDK.
-3. Push all project files to the Space repository.
-4. Open the Space **Settings** page.
-5. Select **ZeroGPU** hardware.
-6. Wait for model preload, dependency installation, and application startup.
+top of this file. Follow [DEPLOYMENT_HUGGINGFACE.md](DEPLOYMENT_HUGGINGFACE.md)
+for the complete preparation, deployment, verification, API, and troubleshooting
+guide.
 
 Hugging Face starts `space_app.py` and automatically installs
 `requirements.txt`. The Space does not install or call Ollama. It loads
@@ -163,9 +163,10 @@ does not require an application API token to download.
 
 ### Hugging Face API
 
-The Analyze button exposes the Gradio API named `/analyze`. Open the deployed
-Space and select **Use via API** to obtain the exact generated Python,
-JavaScript, or curl example for the Space URL and installed Gradio version.
+The Analyze button exposes the Gradio API named `/analyze`. This is different
+from the local FastAPI route `/api/analyze`. Open the deployed Space and select
+**Use via API** to obtain the exact generated Python, JavaScript, or curl example
+for the Space URL and installed Gradio version.
 
 ## Dependency separation
 

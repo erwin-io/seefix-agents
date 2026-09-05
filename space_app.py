@@ -51,8 +51,9 @@ with gr.Blocks(title="SEEFIX Facility Inspection Agent") as demo:
         # SEEFIX Facility Inspection Agent
 
         Upload one university facility image for a preliminary AI-assisted
-        maintenance assessment. Results require human/PPO review and are not an
-        engineering certification.
+        scope review and maintenance assessment. Out-of-scope, undamaged, and
+        unusable images return **No Assessment**. Results require human/PPO
+        review and are not an engineering certification.
         """
     )
 
@@ -77,4 +78,4 @@ with gr.Blocks(title="SEEFIX Facility Inspection Agent") as demo:
 
 
 if __name__ == "__main__":
-    demo.queue(default_concurrency_limit=1).launch()
+    demo.queue(default_concurrency_limit=1, max_size=20).launch()

@@ -1,8 +1,8 @@
 pydantic>=2.10,<3
 pillow>=11,<13
 python-dotenv>=1.0,<2
-gradio>=5.0,<7
-torch>=2.8,<3
-transformers>=4.57,<6
+gradio>=5.0,<6
+torch>=2.8,<2.12
+transformers>=4.57,<5
 accelerate>=1.0,<2
 safetensors>=0.5,<1

@@ -28,14 +28,15 @@ class HuggingFaceProvider(ModelProvider):
 
         try:
             import torch
-            from transformers import AutoModelForMultimodalLM, AutoProcessor
+            from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
             self._torch = torch
             self._processor = AutoProcessor.from_pretrained(self.model_id)
-            self._model = AutoModelForMultimodalLM.from_pretrained(
+            self._model = Qwen3VLForConditionalGeneration.from_pretrained(
                 self.model_id,
-                dtype=torch.float16,
+                dtype=torch.bfloat16,
                 low_cpu_mem_usage=True,
+                attn_implementation="sdpa",
             )
             self._model.to(device)
             self._model.eval()
@@ -80,16 +81,20 @@ class HuggingFaceProvider(ModelProvider):
                 return_tensors="pt",
             )
             inputs = inputs.to(self._model.device)
+            inputs.pop("token_type_ids", None)
 
             with self._torch.inference_mode():
                 generated_ids = self._model.generate(
                     **inputs,
                     max_new_tokens=self.max_output_tokens,
                     do_sample=False,
+                    use_cache=True,
                 )
 
-            prompt_length = inputs["input_ids"].shape[-1]
-            response_ids = generated_ids[:, prompt_length:]
+            response_ids = [
+                output_ids[len(input_ids) :]
+                for input_ids, output_ids in zip(inputs.input_ids, generated_ids)
+            ]
             response_text = self._processor.batch_decode(
                 response_ids,
                 skip_special_tokens=True,
