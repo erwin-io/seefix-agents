@@ -1,3 +1,1152 @@
+==========================================================================================
+PROJECT CODE EXPORT
+==========================================================================================
+Source Folder : C:\Development\seefixmanagement\seefix-agents
+Preset        : python
+Exported At   : 2026-09-06 06:22:50
+Total Files   : 22
+==========================================================================================
+
+FILE LIST
+------------------------------------------------------------------------------------------
+.env
+app/__init__.py
+app/agent.py
+app/cli.py
+app/config.py
+app/image_utils.py
+app/json_utils.py
+app/main.py
+app/prompts.py
+app/providers/__init__.py
+app/providers/base.py
+app/providers/huggingface.py
+app/providers/mock.py
+app/providers/ollama.py
+app/schemas.py
+app/scoring.py
+filestructure.txt
+README.md
+requirements-local.txt
+requirements.txt
+space_app.py
+test_huggingface.py
+
+==========================================================================================
+FILE CONTENTS
+==========================================================================================
+
+==========================================================================================
+FILE: .env
+==========================================================================================
+SEEFIX_RUNTIME=local
+SEEFIX_PROVIDER=ollama
+SEEFIX_OLLAMA_BASE_URL=http://127.0.0.1:11434
+SEEFIX_OLLAMA_MODEL=qwen3-vl:2b-instruct-q4_K_M
+SEEFIX_REQUEST_TIMEOUT_SECONDS=180
+SEEFIX_MAX_UPLOAD_MB=10
+SEEFIX_MAX_IMAGE_DIMENSION=512
+SEEFIX_MODEL_CONTEXT=1536
+SEEFIX_MODEL_MAX_OUTPUT_TOKENS=512
+SEEFIX_MODEL_KEEP_ALIVE=15m
+
+# Used by the Hugging Face Space entry point.
+SEEFIX_HUGGINGFACE_MODEL=Qwen/Qwen3-VL-2B-Instruct
+SEEFIX_HUGGINGFACE_MAX_OUTPUT_TOKENS=512
+
+
+
+==========================================================================================
+FILE: app/__init__.py
+==========================================================================================
+"""SEEFIX standalone facility-image inspection agent."""
+
+
+
+
+==========================================================================================
+FILE: app/agent.py
+==========================================================================================
+from __future__ import annotations
+
+import time
+
+from .config import Settings
+from .image_utils import prepare_image
+from .prompts import PROMPT_VERSION
+from .providers import MockProvider, ModelProvider, OllamaProvider
+from .schemas import AnalysisStatus, InspectionResult
+from .scoring import calculate_priority
+
+
+class FacilityInspectionAgent:
+    def __init__(self, settings: Settings, provider: ModelProvider | None = None) -> None:
+        self.settings = settings
+        self.provider = provider or self._create_provider(settings.provider)
+
+    def _create_provider(self, provider_name: str) -> ModelProvider:
+        if provider_name == "mock":
+            return MockProvider()
+        if provider_name == "ollama":
+            return OllamaProvider(
+                base_url=self.settings.ollama_base_url,
+                model=self.settings.ollama_model,
+                timeout_seconds=self.settings.request_timeout_seconds,
+                model_context=self.settings.model_context,
+                max_output_tokens=self.settings.model_max_output_tokens,
+                keep_alive=self.settings.model_keep_alive,
+            )
+        raise ValueError("SEEFIX_PROVIDER must be either 'mock' or 'ollama'.")
+
+    def analyze(self, image_bytes: bytes) -> InspectionResult:
+        started = time.perf_counter()
+        prepared = prepare_image(
+            image_bytes,
+            max_upload_bytes=self.settings.max_upload_mb * 1024 * 1024,
+            max_dimension=self.settings.max_image_dimension,
+        )
+        provider_result = self.provider.analyze(prepared.jpeg_bytes)
+        assessment = provider_result.assessment
+        priority = calculate_priority(assessment) if assessment is not None else None
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        return InspectionResult(
+            analysis_status=(
+                AnalysisStatus.ASSESSED
+                if provider_result.scope_validation.should_analyze
+                else AnalysisStatus.NO_ASSESSMENT
+            ),
+            scope_validation=provider_result.scope_validation,
+            assessment=assessment,
+            priority=priority,
+            provider=self.provider.name,
+            model_id=self.provider.model_id,
+            prompt_version=PROMPT_VERSION,
+            original_width=prepared.original_width,
+            original_height=prepared.original_height,
+            processed_width=prepared.processed_width,
+            processed_height=prepared.processed_height,
+            processing_time_ms=elapsed_ms,
+        )
+
+
+
+==========================================================================================
+FILE: app/cli.py
+==========================================================================================
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from .agent import FacilityInspectionAgent
+from .config import settings
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Analyze one facility image.")
+    parser.add_argument("image", type=Path)
+    args = parser.parse_args()
+
+    result = FacilityInspectionAgent(settings).analyze(args.image.read_bytes())
+    print(result.model_dump_json(indent=2))
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+==========================================================================================
+FILE: app/config.py
+==========================================================================================
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # Core tests can run before optional web dependencies are installed.
+    load_dotenv = None
+
+
+if load_dotenv:
+    load_dotenv()
+
+
+@dataclass(frozen=True)
+class Settings:
+    runtime: str = os.getenv("SEEFIX_RUNTIME", "local").strip().lower()
+    provider: str = os.getenv("SEEFIX_PROVIDER", "mock").strip().lower()
+    ollama_base_url: str = os.getenv(
+        "SEEFIX_OLLAMA_BASE_URL", "http://127.0.0.1:11434"
+    ).rstrip("/")
+    ollama_model: str = os.getenv(
+        "SEEFIX_OLLAMA_MODEL",
+        "qwen3-vl:2b-instruct-q4_K_M",
+    )
+    request_timeout_seconds: int = int(
+        os.getenv("SEEFIX_REQUEST_TIMEOUT_SECONDS", "180")
+    )
+    max_upload_mb: int = int(os.getenv("SEEFIX_MAX_UPLOAD_MB", "10"))
+    max_image_dimension: int = int(
+        os.getenv("SEEFIX_MAX_IMAGE_DIMENSION", "512")
+    )
+    model_context: int = int(os.getenv("SEEFIX_MODEL_CONTEXT", "1536"))
+    model_max_output_tokens: int = max(
+        512, int(os.getenv("SEEFIX_MODEL_MAX_OUTPUT_TOKENS", "512"))
+    )
+    model_keep_alive: str = os.getenv("SEEFIX_MODEL_KEEP_ALIVE", "15m").strip()
+    huggingface_model: str = os.getenv(
+        "SEEFIX_HUGGINGFACE_MODEL",
+        "Qwen/Qwen3-VL-2B-Instruct",
+    ).strip()
+    huggingface_max_output_tokens: int = max(
+        512, int(os.getenv("SEEFIX_HUGGINGFACE_MAX_OUTPUT_TOKENS", "512"))
+    )
+
+
+settings = Settings()
+
+
+
+==========================================================================================
+FILE: app/image_utils.py
+==========================================================================================
+from __future__ import annotations
+
+from dataclasses import dataclass
+from io import BytesIO
+
+from PIL import Image, ImageOps, UnidentifiedImageError
+
+
+SUPPORTED_FORMATS = {"JPEG", "PNG", "WEBP"}
+
+
+class InvalidImageError(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class PreparedImage:
+    jpeg_bytes: bytes
+    original_width: int
+    original_height: int
+    processed_width: int
+    processed_height: int
+
+
+def prepare_image(
+    data: bytes, *, max_upload_bytes: int, max_dimension: int
+) -> PreparedImage:
+    if not data:
+        raise InvalidImageError("The uploaded image is empty.")
+    if len(data) > max_upload_bytes:
+        raise InvalidImageError(
+            f"Image exceeds the {max_upload_bytes // (1024 * 1024)} MB limit."
+        )
+
+    try:
+        with Image.open(BytesIO(data)) as source:
+            if source.format not in SUPPORTED_FORMATS:
+                raise InvalidImageError("Only JPEG, PNG, and WebP images are supported.")
+            source.verify()
+
+        with Image.open(BytesIO(data)) as source:
+            source = ImageOps.exif_transpose(source)
+            original_width, original_height = source.size
+            source = source.convert("RGB")
+            source.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+            processed_width, processed_height = source.size
+            output = BytesIO()
+            source.save(output, format="JPEG", quality=85, optimize=True)
+    except InvalidImageError:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise InvalidImageError("The uploaded file is not a valid image.") from exc
+
+    return PreparedImage(
+        jpeg_bytes=output.getvalue(),
+        original_width=original_width,
+        original_height=original_height,
+        processed_width=processed_width,
+        processed_height=processed_height,
+    )
+
+
+
+
+==========================================================================================
+FILE: app/json_utils.py
+==========================================================================================
+from __future__ import annotations
+
+import json
+import re
+
+
+_MISSING_OBJECT_COMMA = re.compile(
+    r'("|\]|\}|true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)'
+    r'([ \t]*\r?\n[ \t]*"(?:[^"\\]|\\.)+"[ \t]*:)'
+)
+
+
+def _strip_markdown_fence(text: str) -> str:
+    cleaned = text.strip()
+    if not cleaned.startswith("```"):
+        return cleaned
+
+    lines = cleaned.splitlines()
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _object_candidate(text: str) -> str:
+    start = text.find("{")
+    if start < 0:
+        raise ValueError("Model response did not contain a JSON object.")
+
+    end = text.rfind("}")
+    return text[start : end + 1] if end > start else text[start:]
+
+
+def _close_open_containers(text: str) -> str:
+    """Close only clearly open JSON objects/arrays; never repair an open string."""
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+
+        if character == '"':
+            in_string = True
+        elif character in "{[":
+            stack.append(character)
+        elif character == "}" and stack and stack[-1] == "{":
+            stack.pop()
+        elif character == "]" and stack and stack[-1] == "[":
+            stack.pop()
+
+    if in_string:
+        return text
+
+    closers = {"{": "}", "[": "]"}
+    return text + "".join(closers[item] for item in reversed(stack))
+
+
+def _repair_common_json_issues(text: str) -> str:
+    repaired = _MISSING_OBJECT_COMMA.sub(r"\1,\2", text)
+    repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+    return _close_open_containers(repaired)
+
+
+def extract_json_object(text: str) -> dict:
+    cleaned = _strip_markdown_fence(text)
+    candidates = [cleaned]
+
+    object_candidate = _object_candidate(cleaned)
+    if object_candidate != cleaned:
+        candidates.append(object_candidate)
+
+    repaired_candidate = _repair_common_json_issues(object_candidate)
+    if repaired_candidate not in candidates:
+        candidates.append(repaired_candidate)
+
+    last_error: json.JSONDecodeError | None = None
+    value = None
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+            break
+        except json.JSONDecodeError as exc:
+            last_error = exc
+
+    if value is None:
+        raise ValueError(f"Model response contained invalid JSON: {last_error}")
+
+    if not isinstance(value, dict):
+        raise ValueError("Model response JSON must be an object.")
+    return value
+
+
+
+==========================================================================================
+FILE: app/main.py
+==========================================================================================
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+
+from .agent import FacilityInspectionAgent
+from .config import settings
+from .image_utils import InvalidImageError
+from .providers import ProviderError
+from .schemas import InspectionResult
+
+
+app = FastAPI(
+    title="SEEFIX Facility Inspection Agent POC",
+    version="0.1.0",
+    description="Standalone multimodal facility-image assessment prototype.",
+)
+agent = FacilityInspectionAgent(settings)
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
+@app.get("/", include_in_schema=False)
+def index() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/health")
+def health() -> dict:
+    return {
+        "status": "ok",
+        "runtime": settings.runtime,
+        "provider": agent.provider.name,
+        "model": agent.provider.model_id,
+        "max_image_dimension": settings.max_image_dimension,
+        "model_context": settings.model_context,
+        "model_max_output_tokens": settings.model_max_output_tokens,
+    }
+
+
+@app.post("/api/analyze", response_model=InspectionResult)
+async def analyze_image(
+    image: UploadFile = File(...),
+) -> InspectionResult:
+    image_bytes = await image.read()
+    try:
+        return agent.analyze(image_bytes)
+    except InvalidImageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+
+==========================================================================================
+FILE: app/prompts.py
+==========================================================================================
+from __future__ import annotations
+
+PROMPT_VERSION = "facility-inspection-v5-scope-validation"
+
+
+SYSTEM_PROMPT = """You are the SEEFIX Facility Inspection Agent.
+Analyze a university facility image using only visible image evidence.
+
+Rules:
+1. First decide whether the image should receive a facility-maintenance assessment.
+2. Use scope_decision 'Facility Issue' only when a visible defect, damage,
+   obstruction, leak, hazard, sanitation concern, or maintenance condition exists.
+3. Use 'No Visible Maintenance Issue' when a facility or campus area is visible
+   but no maintenance issue can be identified.
+4. Use 'Out of Scope' when the image primarily contains unrelated scenery,
+   people, animals, food, documents, screens, or personal objects and shows no
+   facility issue.
+5. Use 'Insufficient Image' when blur, darkness, obstruction, extreme close-up,
+   or poor framing prevents a responsible scope decision.
+6. A person, animal, vehicle, or landscape element does not make an image out of
+   scope when a facility issue is also clearly visible.
+7. For every decision other than 'Facility Issue', set assessment to null. Never
+   invent an assessment, urgency, duration, or priority for these images.
+8. Describe only evidence that is visible in the image.
+9. Separate visible evidence from possible causes. Never present a possible cause as confirmed.
+10. This is a preliminary maintenance assessment, not a structural, electrical, or engineering certification.
+11. Safety-critical findings must be flagged for human review.
+12. Do not identify people, infer protected traits, or include personal information.
+13. When scope_decision is 'Facility Issue', assess the visible defect type,
+   extent, affected material or component, safety
+   indicators, likely operational impact, preliminary repair scope, urgency,
+   estimated repair duration, certainty, and image limitations.
+14. Do not invent the building, location, history, recurrence, measurements,
+   hidden conditions, or facts outside the image.
+15. Keep every text value concise and factual.
+16. Return only one JSON object matching the provided schema. Do not use Markdown.
+17. Complete the entire JSON object and keep list items brief so the response is
+    never cut off.
+"""
+
+
+def build_user_prompt() -> str:
+    return """Validate the scope of the attached image first. Analyze it deeply only
+when a visible facility-maintenance issue exists.
+
+Return the compact structured result. For no visible issue, out-of-scope, or
+insufficient images, explain the scope decision briefly and set assessment to
+null. For a facility issue, use short evidence statements and at most two
+possible causes. Duration must be a practical preliminary range. When details
+are uncertain, use conservative assumptions and require PPO review.
+"""
+
+
+
+==========================================================================================
+FILE: app/providers/__init__.py
+==========================================================================================
+from .base import ModelProvider, ProviderError
+from .mock import MockProvider
+from .ollama import OllamaProvider
+
+__all__ = ["ModelProvider", "ProviderError", "MockProvider", "OllamaProvider"]
+
+
+
+
+==========================================================================================
+FILE: app/providers/base.py
+==========================================================================================
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+
+from ..schemas import ProviderAnalysis
+
+
+class ProviderError(RuntimeError):
+    pass
+
+
+class ModelProvider(ABC):
+    name: str
+    model_id: str
+
+    @abstractmethod
+    def analyze(self, image_bytes: bytes) -> ProviderAnalysis:
+        raise NotImplementedError
+
+
+
+==========================================================================================
+FILE: app/providers/huggingface.py
+==========================================================================================
+from __future__ import annotations
+
+import json
+from io import BytesIO
+
+from PIL import Image
+
+from ..json_utils import extract_json_object
+from ..prompts import SYSTEM_PROMPT, build_user_prompt
+from ..schemas import ModelInspectionResponse, ProviderAnalysis
+from .base import ModelProvider, ProviderError
+
+
+class HuggingFaceProvider(ModelProvider):
+    """Runs the production vision-language model with Transformers."""
+
+    name = "huggingface"
+
+    def __init__(
+        self,
+        *,
+        model: str,
+        max_output_tokens: int,
+        device: str = "cuda",
+    ) -> None:
+        self.model_id = model
+        self.max_output_tokens = max_output_tokens
+
+        try:
+            import torch
+            from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+
+            self._torch = torch
+            self._processor = AutoProcessor.from_pretrained(self.model_id)
+            self._model = Qwen3VLForConditionalGeneration.from_pretrained(
+                self.model_id,
+                dtype=torch.bfloat16,
+                low_cpu_mem_usage=True,
+                attn_implementation="sdpa",
+            )
+            self._model.to(device)
+            self._model.eval()
+        except Exception as exc:
+            raise ProviderError(
+                f"Unable to load Hugging Face model '{self.model_id}': {exc}"
+            ) from exc
+
+    def analyze(self, image_bytes: bytes) -> ProviderAnalysis:
+        try:
+            with Image.open(BytesIO(image_bytes)) as source:
+                image = source.convert("RGB")
+
+            schema = json.dumps(
+                ModelInspectionResponse.model_json_schema(),
+                separators=(",", ":"),
+            )
+            user_prompt = (
+                f"{build_user_prompt()}\n"
+                "Return only valid JSON matching this schema:\n"
+                f"{schema}"
+            )
+            messages = [
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": SYSTEM_PROMPT}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": image},
+                        {"type": "text", "text": user_prompt},
+                    ],
+                },
+            ]
+
+            inputs = self._processor.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_dict=True,
+                return_tensors="pt",
+            )
+            inputs = inputs.to(self._model.device)
+            inputs.pop("token_type_ids", None)
+
+            with self._torch.inference_mode():
+                generated_ids = self._model.generate(
+                    **inputs,
+                    max_new_tokens=self.max_output_tokens,
+                    do_sample=False,
+                    use_cache=True,
+                )
+
+            response_ids = [
+                output_ids[len(input_ids) :]
+                for input_ids, output_ids in zip(inputs.input_ids, generated_ids)
+            ]
+            response_text = self._processor.batch_decode(
+                response_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )[0]
+
+            data = extract_json_object(response_text)
+            model_result = ModelInspectionResponse.model_validate(data)
+            return model_result.to_provider_result()
+        except ProviderError:
+            raise
+        except Exception as exc:
+            raise ProviderError(
+                f"Hugging Face inference returned an invalid assessment: {exc}"
+            ) from exc
+
+
+
+==========================================================================================
+FILE: app/providers/mock.py
+==========================================================================================
+from __future__ import annotations
+
+from ..schemas import (
+    ProviderAnalysis,
+    ScopeDecision,
+    ScopeValidation,
+)
+from .base import ModelProvider
+
+
+class MockProvider(ModelProvider):
+    """Development provider. It does not perform real visual inference."""
+
+    name = "mock"
+    model_id = "mock-facility-agent-v1"
+
+    def analyze(self, image_bytes: bytes) -> ProviderAnalysis:
+        return ProviderAnalysis(
+            scope_validation=ScopeValidation(
+                decision=ScopeDecision.INSUFFICIENT_IMAGE,
+                should_analyze=False,
+                reason="Mock mode does not inspect image pixels.",
+                detected_subjects=[],
+            ),
+            assessment=None,
+        )
+
+
+
+==========================================================================================
+FILE: app/providers/ollama.py
+==========================================================================================
+from __future__ import annotations
+
+import base64
+import json
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+from ..json_utils import extract_json_object
+from ..prompts import SYSTEM_PROMPT, build_user_prompt
+from ..schemas import ModelInspectionResponse, ProviderAnalysis
+from .base import ModelProvider, ProviderError
+
+
+class OllamaProvider(ModelProvider):
+    name = "ollama"
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        model: str,
+        timeout_seconds: int,
+        model_context: int,
+        max_output_tokens: int,
+        keep_alive: str,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.model_id = model
+        self.timeout_seconds = timeout_seconds
+        self.model_context = model_context
+        self.max_output_tokens = max_output_tokens
+        self.keep_alive = keep_alive
+
+    def analyze(self, image_bytes: bytes) -> ProviderAnalysis:
+        schema = self._compact_schema(ModelInspectionResponse.model_json_schema())
+        payload = {
+            "model": self.model_id,
+            "stream": False,
+            "think": False,
+            "format": schema,
+            "keep_alive": self.keep_alive,
+            "options": {
+                "temperature": 0,
+                "num_ctx": self.model_context,
+                "num_predict": self.max_output_tokens,
+            },
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": build_user_prompt(),
+                    "images": [base64.b64encode(image_bytes).decode("ascii")],
+                },
+            ],
+        }
+        body = self._chat(payload)
+        self._print_timing(body)
+
+        try:
+            content = body["message"]["content"]
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("message.content was empty")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProviderError(
+                f"Ollama returned an invalid API response envelope: {exc}"
+            ) from exc
+
+        try:
+            return self._validate_content(content)
+        except (TypeError, ValueError) as exc:
+            print(
+                f"[OLLAMA JSON] Initial response was invalid ({exc}); "
+                "running one text-only repair attempt.",
+                flush=True,
+            )
+
+        repair_payload = {
+            "model": self.model_id,
+            "stream": False,
+            "think": False,
+            "format": schema,
+            "keep_alive": self.keep_alive,
+            "options": {
+                "temperature": 0,
+                "num_ctx": self.model_context,
+                "num_predict": self.max_output_tokens,
+            },
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Repair the JSON below. Preserve its assessment values, fill only "
+                        "required missing fields conservatively, and return only one valid "
+                        "JSON object matching the required response format.\n\n"
+                        f"{content}"
+                    ),
+                }
+            ],
+        }
+        repaired_body = self._chat(repair_payload)
+        try:
+            self._print_timing(repaired_body, label="OLLAMA REPAIR TIMING")
+            repaired_content = repaired_body["message"]["content"]
+            return self._validate_content(repaired_content)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProviderError(
+                "Ollama returned malformed structured JSON after one automatic repair "
+                f"attempt: {exc}"
+            ) from exc
+
+    def _chat(self, payload: dict) -> dict:
+        request = Request(
+            f"{self.base_url}/api/chat",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        try:
+            with urlopen(request, timeout=self.timeout_seconds) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise ProviderError(f"Ollama returned HTTP {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise ProviderError(
+                f"Cannot connect to Ollama at {self.base_url}. Is Ollama running?"
+            ) from exc
+        except TimeoutError as exc:
+            raise ProviderError(
+                f"Ollama exceeded the {self.timeout_seconds}-second timeout. "
+                "Run 'ollama ps' in another terminal while analyzing. If PROCESSOR "
+                "shows 100% CPU, use the 2B model or enable supported GPU acceleration."
+            ) from exc
+
+    @staticmethod
+    def _validate_content(content: str) -> ProviderAnalysis:
+        data = extract_json_object(content)
+        model_result = ModelInspectionResponse.model_validate(data)
+        return model_result.to_provider_result()
+
+    @staticmethod
+    def _compact_schema(value):
+        if isinstance(value, dict):
+            return {
+                key: OllamaProvider._compact_schema(item)
+                for key, item in value.items()
+                if key not in {"title", "description", "default"}
+            }
+        if isinstance(value, list):
+            return [OllamaProvider._compact_schema(item) for item in value]
+        return value
+
+    @staticmethod
+    def _print_timing(body: dict, label: str = "OLLAMA TIMING") -> None:
+        def seconds(field: str) -> float:
+            return round(float(body.get(field, 0)) / 1_000_000_000, 2)
+
+        eval_count = int(body.get("eval_count", 0) or 0)
+        eval_seconds = seconds("eval_duration")
+        tokens_per_second = round(eval_count / eval_seconds, 2) if eval_seconds else 0
+        print(
+            f"[{label}] "
+            f"total={seconds('total_duration')}s "
+            f"load={seconds('load_duration')}s "
+            f"prompt/image={seconds('prompt_eval_duration')}s "
+            f"generation={eval_seconds}s "
+            f"output_tokens={eval_count} "
+            f"speed={tokens_per_second} tokens/s",
+            flush=True,
+        )
+
+
+
+==========================================================================================
+FILE: app/schemas.py
+==========================================================================================
+from __future__ import annotations
+
+from enum import Enum
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class FacilityCategory(str, Enum):
+    ELECTRICAL_FIRE = "Electrical and Fire Safety"
+    STRUCTURAL_SURFACE = "Structural and Surface Damage"
+    PLUMBING_WATER = "Plumbing and Water Damage"
+    ACCESS_SAFETY = "Access and Safety Hazards"
+    FIXTURES_EQUIPMENT = "Building Fixtures and Equipment"
+    SANITATION_ENVIRONMENTAL = "Sanitation and Environmental"
+    ROADS_GROUNDS = "Roads, Walkways and Grounds"
+    OTHER_UNCERTAIN = "Other or Uncertain"
+
+
+class Urgency(str, Enum):
+    LOW = "Low"
+    MEDIUM = "Medium"
+    HIGH = "High"
+    CRITICAL = "Critical"
+
+
+class AnalysisCertainty(str, Enum):
+    LOW = "Low"
+    MEDIUM = "Medium"
+    HIGH = "High"
+
+
+class AnalysisStatus(str, Enum):
+    ASSESSED = "Assessed"
+    NO_ASSESSMENT = "No Assessment"
+
+
+class ScopeDecision(str, Enum):
+    FACILITY_ISSUE = "Facility Issue"
+    NO_VISIBLE_ISSUE = "No Visible Maintenance Issue"
+    OUT_OF_SCOPE = "Out of Scope"
+    INSUFFICIENT_IMAGE = "Insufficient Image"
+
+
+class ScopeValidation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: ScopeDecision
+    should_analyze: bool
+    reason: str = Field(min_length=5, max_length=300)
+    detected_subjects: list[str] = Field(default_factory=list, max_length=6)
+
+    @model_validator(mode="after")
+    def validate_should_analyze(self) -> "ScopeValidation":
+        expected = self.decision == ScopeDecision.FACILITY_ISSUE
+        if self.should_analyze != expected:
+            raise ValueError("should_analyze must match the scope decision")
+        return self
+
+
+class RiskFlags(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    immediate_danger: bool = False
+    electrical_exposure: bool = False
+    fire_or_smoke_indicator: bool = False
+    structural_instability_indicator: bool = False
+    active_flooding: bool = False
+    blocked_access_or_exit: bool = False
+    public_access_exposure: bool = False
+
+
+class AgentAssessment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category: FacilityCategory
+    summary: str = Field(min_length=5, max_length=600)
+    observed_evidence: list[str] = Field(min_length=1, max_length=8)
+    possible_causes: list[str] = Field(default_factory=list, max_length=5)
+    safety_indicators: list[str] = Field(default_factory=list, max_length=8)
+    risk_flags: RiskFlags = Field(default_factory=RiskFlags)
+    recommended_urgency: Urgency
+    urgency_reasons: list[str] = Field(min_length=1, max_length=6)
+    estimated_min_hours: float = Field(ge=0.25, le=720)
+    estimated_max_hours: float = Field(ge=0.25, le=1440)
+    duration_assumptions: list[str] = Field(default_factory=list, max_length=6)
+    analysis_certainty: AnalysisCertainty
+    needs_review: bool
+    follow_up_questions: list[str] = Field(default_factory=list, max_length=5)
+    limitations: list[str] = Field(default_factory=list, max_length=6)
+
+    @model_validator(mode="after")
+    def validate_duration_range(self) -> "AgentAssessment":
+        if self.estimated_max_hours < self.estimated_min_hours:
+            raise ValueError("estimated_max_hours must be >= estimated_min_hours")
+        return self
+
+
+class ModelAssessment(BaseModel):
+    """Compact internal schema generated by the vision-language model."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    category: FacilityCategory
+    summary: str = Field(min_length=5, max_length=240)
+    observed_evidence: list[str] = Field(min_length=1, max_length=4)
+    possible_causes: list[str] = Field(default_factory=list, max_length=2)
+    risk_flags: RiskFlags = Field(default_factory=RiskFlags)
+    recommended_urgency: Urgency
+    urgency_reason: str = Field(min_length=3, max_length=240)
+    estimated_min_hours: float = Field(ge=0.25, le=720)
+    estimated_max_hours: float = Field(ge=0.25, le=1440)
+    analysis_certainty: AnalysisCertainty
+    needs_review: bool
+    limitation: str | None = Field(default=None, max_length=240)
+
+    @model_validator(mode="after")
+    def validate_duration_range(self) -> "ModelAssessment":
+        if self.estimated_max_hours < self.estimated_min_hours:
+            raise ValueError("estimated_max_hours must be >= estimated_min_hours")
+        return self
+
+    def to_agent_assessment(self) -> AgentAssessment:
+        safety_labels = {
+            "immediate_danger": "Possible immediate danger is visible.",
+            "electrical_exposure": "Possible electrical exposure is visible.",
+            "fire_or_smoke_indicator": "A possible fire or smoke indicator is visible.",
+            "structural_instability_indicator": (
+                "A possible structural-instability indicator is visible."
+            ),
+            "active_flooding": "Possible active flooding is visible.",
+            "blocked_access_or_exit": "Access or an exit may be blocked.",
+            "public_access_exposure": "The issue may expose a public access area.",
+        }
+        safety_indicators = [
+            label
+            for field_name, label in safety_labels.items()
+            if getattr(self.risk_flags, field_name)
+        ]
+        limitations = [self.limitation] if self.limitation else []
+        follow_up_questions = (
+            ["Can PPO staff inspect and confirm the affected area?"]
+            if self.needs_review
+            else []
+        )
+
+        return AgentAssessment(
+            category=self.category,
+            summary=self.summary,
+            observed_evidence=self.observed_evidence,
+            possible_causes=self.possible_causes,
+            safety_indicators=safety_indicators,
+            risk_flags=self.risk_flags,
+            recommended_urgency=self.recommended_urgency,
+            urgency_reasons=[self.urgency_reason],
+            estimated_min_hours=self.estimated_min_hours,
+            estimated_max_hours=self.estimated_max_hours,
+            duration_assumptions=[
+                "Preliminary estimate based on visible scope and report context."
+            ],
+            analysis_certainty=self.analysis_certainty,
+            needs_review=self.needs_review,
+            follow_up_questions=follow_up_questions,
+            limitations=limitations,
+        )
+
+
+class ModelInspectionResponse(BaseModel):
+    """Compact scope decision and optional assessment generated by the model."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope_decision: ScopeDecision
+    scope_reason: str = Field(min_length=5, max_length=300)
+    detected_subjects: list[str] = Field(default_factory=list, max_length=6)
+    assessment: ModelAssessment | None = None
+
+    @model_validator(mode="after")
+    def validate_scope_and_assessment(self) -> "ModelInspectionResponse":
+        should_have_assessment = self.scope_decision == ScopeDecision.FACILITY_ISSUE
+        if should_have_assessment and self.assessment is None:
+            raise ValueError("assessment is required for a visible facility issue")
+        if not should_have_assessment and self.assessment is not None:
+            raise ValueError("assessment must be null when no assessment is appropriate")
+        return self
+
+    def to_provider_result(self) -> "ProviderAnalysis":
+        should_analyze = self.scope_decision == ScopeDecision.FACILITY_ISSUE
+        return ProviderAnalysis(
+            scope_validation=ScopeValidation(
+                decision=self.scope_decision,
+                should_analyze=should_analyze,
+                reason=self.scope_reason,
+                detected_subjects=self.detected_subjects,
+            ),
+            assessment=(
+                self.assessment.to_agent_assessment()
+                if self.assessment is not None
+                else None
+            ),
+        )
+
+
+class ProviderAnalysis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope_validation: ScopeValidation
+    assessment: AgentAssessment | None = None
+
+
+class PriorityBreakdown(BaseModel):
+    urgency_points: int
+    recurrence_points: int
+    verification_points: int
+    public_exposure_points: int
+    total: int
+
+
+class InspectionResult(BaseModel):
+    analysis_status: AnalysisStatus
+    scope_validation: ScopeValidation
+    assessment: AgentAssessment | None
+    priority: PriorityBreakdown | None
+    provider: str
+    model_id: str
+    prompt_version: str
+    original_width: int
+    original_height: int
+    processed_width: int
+    processed_height: int
+    processing_time_ms: int
+
+    @model_validator(mode="after")
+    def validate_result_state(self) -> "InspectionResult":
+        assessed = self.analysis_status == AnalysisStatus.ASSESSED
+        if assessed != self.scope_validation.should_analyze:
+            raise ValueError("analysis_status must match scope_validation")
+        if assessed and (self.assessment is None or self.priority is None):
+            raise ValueError("assessed results require assessment and priority")
+        if not assessed and (self.assessment is not None or self.priority is not None):
+            raise ValueError("no-assessment results must have null assessment and priority")
+        return self
+
+
+
+==========================================================================================
+FILE: app/scoring.py
+==========================================================================================
+from __future__ import annotations
+
+from .schemas import AgentAssessment, PriorityBreakdown, Urgency
+
+
+URGENCY_POINTS = {
+    Urgency.LOW: 25,
+    Urgency.MEDIUM: 50,
+    Urgency.HIGH: 75,
+    Urgency.CRITICAL: 100,
+}
+
+
+def calculate_priority(assessment: AgentAssessment) -> PriorityBreakdown:
+    urgency_points = URGENCY_POINTS[assessment.recommended_urgency]
+    recurrence_points = 0
+    verification_points = 0
+    public_exposure_points = 10 if assessment.risk_flags.public_access_exposure else 0
+    total = (
+        urgency_points
+        + recurrence_points
+        + verification_points
+        + public_exposure_points
+    )
+    return PriorityBreakdown(
+        urgency_points=urgency_points,
+        recurrence_points=recurrence_points,
+        verification_points=verification_points,
+        public_exposure_points=public_exposure_points,
+        total=total,
+    )
+
+
+
+==========================================================================================
+FILE: filestructure.txt
+==========================================================================================
 |-- .env
 |-- .env.example
 |-- .gitignore
@@ -3401,15 +4550,233 @@
         |-- scoring.cpython-312.pyc
         |-- __init__.cpython-310.pyc
         |-- __init__.cpython-312.pyc
-|-- huggingfacecommands.md
 |-- LICENSE
 |-- README.md
 |-- requirements-local.txt
 |-- requirements.txt
 |-- run_windows.bat
-|-- seefix-agents_export_python_20260906_062250.txt
+|-- seefix-agents_export_python_20260906_054949.txt
 |-- space_app.py
 |-- tests
     |-- test_core.py
     |-- __init__.py
 |-- test_huggingface.py
+
+
+
+==========================================================================================
+FILE: README.md
+==========================================================================================
+---
+title: SEEFIX Facility Inspection Agent
+emoji: 🏫
+colorFrom: blue
+colorTo: indigo
+sdk: gradio
+sdk_version: 6.26.0
+app_file: space_app.py
+python_version: 3.12
+startup_duration_timeout: 1h
+short_description: AI facility image validation and maintenance assessment.
+tags:
+  - vision-language-model
+  - facility-maintenance
+  - university
+models:
+  - Qwen/Qwen3-VL-2B-Instruct
+preload_from_hub:
+  - Qwen/Qwen3-VL-2B-Instruct
+---
+
+
+==========================================================================================
+FILE: requirements-local.txt
+==========================================================================================
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+python-multipart>=0.0.20,<1
+pydantic>=2.10,<3
+pillow>=11,<13
+python-dotenv>=1.0,<2
+
+
+
+==========================================================================================
+FILE: requirements.txt
+==========================================================================================
+pydantic>=2.10,<3
+pillow>=11,<13
+python-dotenv>=1.0,<2
+gradio==6.26.0
+torch>=2.8,<2.12
+torchvision==0.26.0
+transformers==5.16.1
+accelerate>=1.0,<2
+safetensors>=0.5,<1
+
+
+==========================================================================================
+FILE: space_app.py
+==========================================================================================
+from __future__ import annotations
+
+from io import BytesIO
+
+import gradio as gr
+import spaces
+from PIL import Image
+
+from app.agent import FacilityInspectionAgent
+from app.config import settings
+from app.providers.base import ProviderError
+from app.providers.huggingface import HuggingFaceProvider
+
+
+provider = HuggingFaceProvider(
+    model=settings.huggingface_model,
+    max_output_tokens=settings.huggingface_max_output_tokens,
+    device="cuda",
+)
+
+agent = FacilityInspectionAgent(
+    settings,
+    provider=provider,
+)
+
+
+def health_check(message: str = "ping") -> dict[str, str]:
+    """
+    Lightweight endpoint for health checks and automatic probes.
+
+    This endpoint does not run the vision model or request ZeroGPU.
+    """
+    return {
+        "status": "ok",
+        "service": "seefix-facility-inspection-agent",
+        "message": message,
+    }
+
+
+def image_to_bytes(image: Image.Image) -> bytes:
+    output = BytesIO()
+
+    image.convert("RGB").save(
+        output,
+        format="JPEG",
+        quality=85,
+        optimize=True,
+    )
+
+    return output.getvalue()
+
+
+@spaces.GPU(duration=120)
+def analyze_report(
+    image: Image.Image | None,
+) -> dict:
+    if image is None:
+        raise gr.Error(
+            "Select a JPEG, PNG, or WebP image first."
+        )
+
+    try:
+        result = agent.analyze(
+            image_to_bytes(image)
+        )
+
+        return result.model_dump(mode="json")
+
+    except (ProviderError, ValueError) as exc:
+        raise gr.Error(str(exc)) from exc
+
+
+with gr.Blocks(
+    title="SEEFIX Facility Inspection Agent"
+) as demo:
+    # Public health endpoint for uptime checks and probes.
+    gr.api(
+        health_check,
+        api_name="health",
+    )
+
+    gr.Markdown(
+        """
+        # SEEFIX Facility Inspection Agent
+
+        Upload one university facility image for a preliminary
+        AI-assisted scope review and maintenance assessment.
+
+        Out-of-scope, undamaged, and unusable images return
+        **No Assessment**.
+
+        Results require human/PPO review and are not an
+        engineering certification.
+        """
+    )
+
+    with gr.Row():
+        with gr.Column():
+            image_input = gr.Image(
+                type="pil",
+                label="Facility image",
+                sources=["upload", "webcam"],
+            )
+
+            analyze_button = gr.Button(
+                "Analyze report",
+                variant="primary",
+            )
+
+        with gr.Column():
+            result_output = gr.JSON(
+                label="Structured assessment"
+            )
+
+    analyze_button.click(
+        fn=analyze_report,
+        inputs=[image_input],
+        outputs=result_output,
+        api_name="analyze",
+
+        # The endpoint remains callable by Gradio clients but is
+        # excluded from automatic tool discovery. This prevents
+        # generic "ping" probes from being sent to the image input.
+        api_visibility="undocumented",
+    )
+
+
+if __name__ == "__main__":
+    demo.queue(
+        default_concurrency_limit=1,
+        max_size=20,
+    ).launch()
+
+
+==========================================================================================
+FILE: test_huggingface.py
+==========================================================================================
+from pathlib import Path
+
+from gradio_client import Client, handle_file
+
+
+IMAGE_PATH = Path(
+    r"C:\Users\Erwin\Downloads\images (3).jpeg"
+)
+
+if not IMAGE_PATH.is_file():
+    raise FileNotFoundError(
+        f"Test image was not found: {IMAGE_PATH}"
+    )
+
+client = Client("erwinramirez220/seefix-agents")
+
+print(f"Uploading: {IMAGE_PATH}")
+
+result = client.predict(
+    image=handle_file(str(IMAGE_PATH)),
+    api_name="/analyze",
+)
+
+print("\nSEEFIX assessment:")
+print(result)

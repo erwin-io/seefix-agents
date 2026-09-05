@@ -50,7 +50,7 @@ def image_to_bytes(image: Image.Image) -> bytes:
     return output.getvalue()
 
 
-@spaces.GPU(duration=120)
+@spaces.GPU(duration=45)
 def analyze_report(
     image: Image.Image | None,
 ) -> dict:
@@ -119,8 +119,7 @@ with gr.Blocks(
         api_name="analyze",
 
         # The endpoint remains callable by Gradio clients but is
-        # excluded from automatic tool discovery. This prevents
-        # generic "ping" probes from being sent to the image input.
+        # excluded from automatic tool discovery.
         api_visibility="undocumented",
     )
 
