@@ -1,0 +1,46 @@
+|-- .env
+|-- .env.example
+|-- .gitignore
+|-- app
+    |-- agent.py
+    |-- cli.py
+    |-- config.py
+    |-- image_utils.py
+    |-- json_utils.py
+    |-- main.py
+    |-- prompts.py
+    |-- providers
+        |-- base.py
+        |-- huggingface.py
+        |-- mock.py
+        |-- ollama.py
+        |-- __init__.py
+        |-- __pycache__
+            |-- base.cpython-312.pyc
+            |-- mock.cpython-312.pyc
+            |-- ollama.cpython-312.pyc
+            |-- __init__.cpython-312.pyc
+    |-- schemas.py
+    |-- scoring.py
+    |-- static
+        |-- index.html
+    |-- __init__.py
+    |-- __pycache__
+        |-- agent.cpython-312.pyc
+        |-- config.cpython-312.pyc
+        |-- image_utils.cpython-312.pyc
+        |-- json_utils.cpython-312.pyc
+        |-- main.cpython-312.pyc
+        |-- prompts.cpython-312.pyc
+        |-- schemas.cpython-312.pyc
+        |-- scoring.cpython-312.pyc
+        |-- __init__.cpython-312.pyc
+|-- LICENSE
+|-- README.md
+|-- requirements-local.txt
+|-- requirements.txt
+|-- run_windows.bat
+|-- space_app.py
+|-- tests
+    |-- test_core.py
+    |-- __init__.py

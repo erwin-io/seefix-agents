@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SEEFIX AI Agent POC</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #07121e; color: #edf6ff; }
+    main { width: min(1120px, 94vw); margin: 36px auto; }
+    h1 { margin-bottom: 6px; }
+    .sub { color: #9eb6ca; margin-top: 0; }
+    .grid { display: grid; grid-template-columns: minmax(300px, 420px) 1fr; gap: 22px; align-items: start; }
+    .card { background: #0e2031; border: 1px solid #24435e; border-radius: 16px; padding: 20px; box-shadow: 0 16px 40px #0006; }
+    label { display: block; color: #bcd0e0; font-size: 13px; margin: 14px 0 6px; }
+    input, button { width: 100%; border-radius: 9px; border: 1px solid #35546d; padding: 11px; background: #091725; color: #fff; }
+    button { margin-top: 18px; background: #0c8ce9; border: 0; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .55; cursor: wait; }
+    #preview { display: none; width: 100%; max-height: 330px; object-fit: contain; margin-top: 14px; border-radius: 10px; background: #050b11; }
+    .status { min-height: 24px; color: #7ec8ff; }
+    .warn { padding: 10px 12px; background: #392d09; border: 1px solid #7a621a; color: #ffe69a; border-radius: 9px; font-size: 13px; }
+    .metric { display: inline-block; padding: 6px 9px; margin: 3px; border-radius: 999px; background: #16354e; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #07131f; padding: 14px; border-radius: 10px; max-height: 620px; overflow: auto; }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>SEEFIX Facility Inspection Agent</h1>
+  <p class="sub">Standalone image-analysis proof of concept</p>
+  <div class="grid">
+    <form id="form" class="card">
+      <div class="warn" id="mode">Checking provider...</div>
+      <label for="image">Facility image</label>
+      <input id="image" name="image" type="file" accept="image/jpeg,image/png,image/webp" required>
+      <img id="preview" alt="Selected facility image preview">
+      <button id="submit" type="submit">Analyze image</button>
+    </form>
+    <section class="card">
+      <div id="status" class="status">Select an image to begin.</div>
+      <div id="summary"></div>
+      <pre id="result">The validated JSON assessment will appear here.</pre>
+    </section>
+  </div>
+</main>
+<script>
+const form = document.querySelector('#form');
+const image = document.querySelector('#image');
+const preview = document.querySelector('#preview');
+const button = document.querySelector('#submit');
+const status = document.querySelector('#status');
+const result = document.querySelector('#result');
+const summary = document.querySelector('#summary');
+const mode = document.querySelector('#mode');
+
+fetch('/health').then(r => r.json()).then(h => {
+  mode.textContent = h.provider === 'mock'
+    ? 'MOCK MODE: workflow test only; image pixels are not analyzed.'
+    : `LOCAL MODEL: ${h.model}`;
+});
+
+image.addEventListener('change', () => {
+  if (!image.files[0]) return;
+  preview.src = URL.createObjectURL(image.files[0]);
+  preview.style.display = 'block';
+});
+
+form.addEventListener('submit', async event => {
+  event.preventDefault();
+  button.disabled = true;
+  status.textContent = 'Analyzing image...';
+  summary.innerHTML = '';
+  result.textContent = '';
+  try {
+    const response = await fetch('/api/analyze', { method: 'POST', body: new FormData(form) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Analysis failed');
+    const a = data.assessment;
+    status.textContent = `Completed in ${data.processing_time_ms} ms`;
+    summary.innerHTML = `
+      <h2>${a.category}</h2>
+      <p>${a.summary}</p>
+      <span class="metric">Urgency: ${a.recommended_urgency}</span>
+      <span class="metric">Certainty: ${a.analysis_certainty}</span>
+      <span class="metric">Priority: ${data.priority.total}</span>`;
+    result.textContent = JSON.stringify(data, null, 2);
+  } catch (error) {
+    status.textContent = `Error: ${error.message}`;
+    result.textContent = '';
+  } finally {
+    button.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
