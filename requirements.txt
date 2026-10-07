@@ -1,9 +1,8 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
 pydantic>=2.10,<3
 pillow>=11,<13
 python-dotenv>=1.0,<2
-gradio==6.26.0
-torch>=2.8,<2.12
-torchvision==0.26.0
-transformers==5.16.1
-accelerate>=1.0,<2
-safetensors>=0.5,<1
+psycopg[binary]>=3.2,<4
+
+

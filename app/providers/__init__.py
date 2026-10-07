@@ -1,6 +1,16 @@
-from .base import ModelProvider, ProviderError
-from .mock import MockProvider
-from .ollama import OllamaProvider
+from .base import (
+    ProviderError,
+)
 
-__all__ = ["ModelProvider", "ProviderError", "MockProvider", "OllamaProvider"]
+from .ollama import (
+    OllamaProvider,
+)
+
+
+__all__ = [
+    "ProviderError",
+    "OllamaProvider",
+]
+
+
 
