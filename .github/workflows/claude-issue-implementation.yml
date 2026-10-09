@@ -1,0 +1,67 @@
+name: Claude Code Agent issue implementation
+
+# Opt-in: only repository owner erwin-io may label issues 'claude-build'
+# or use @claude commands. API usage requires ANTHROPIC_API_KEY secret.
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: seefix-agent-claude-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    if: >-
+      github.actor == 'erwin-io' &&
+      (
+        (github.event_name == 'issues' &&
+         github.event.label.name == 'claude-build' &&
+         github.event.issue.state == 'open' &&
+         !github.event.issue.pull_request) ||
+        (github.event_name == 'issue_comment' &&
+         !github.event.issue.pull_request &&
+         startsWith(github.event.comment.body, '@claude'))
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout base branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Claude Code — SEEFIX Python Agent development
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          track_progress: ${{ github.event_name == 'issues' }}
+          prompt: |
+            You are the dedicated SEEFIX Python/FastAPI AI Agent developer.
+            Repository: ${{ github.repository }}
+            Issue: #${{ github.event.issue.number }}
+            Review relevant source, tests, docs and existing contract before editing.
+            Preserve current PostgreSQL dbo schema, queue claiming, concurrent worker
+            guarantees, cancellation-safe writes, timeouts, retries, AI output
+            validation and Node API compatibility.
+            AI is advisory. Never grant an Agent authority to approve INTERNAL
+            or PROCUREMENT routing, assign workers, choose providers or mark
+            Work Orders complete; human staff remain the workflow authority.
+            Do not run a live model, production database mutation or destructive
+            schema migration without an approved isolated test setup.
+            Implement bounded changes on a feature branch; add Python unit tests.
+            Use Python 3.11+, install requirements and pytest, run pytest -q tests
+            for tests executable without live DB/Ollama, and document integration
+            tests unavailable without supplied development resources.
+            Open a draft PR with change summary, test evidence and blockers.
+            Do not edit other repos, push to main, merge, close acceptance epics,
+            publish secrets or invent endpoints.
