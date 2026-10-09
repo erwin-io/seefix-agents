@@ -109,10 +109,11 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="SEEFIX Agent Service",
-    version="3.0.0",
+    version="4.0.0",
     description=(
-        "Local/on-premises SEEFIX Agent service for inspection, deterministic policy/knowledge, "
-        "Maintenance Request drafting, Procurement assistance, Work Order review, and completion assistance."
+        "Local/on-premises SEEFIX Agent service for inspection, deterministic prioritization/knowledge, "
+        "Maintenance Request drafting, Maintenance Review support, conditional Procurement assistance, "
+        "route-aware Work Order assistance, and completion assistance."
     ),
     lifespan=lifespan,
 )
@@ -181,6 +182,17 @@ def process_report(report_id: UUID) -> dict:
         if current is None:
             raise LookupError("Report was not found.")
         agent_status = str(current["AgentStatus"])
+        # A repeat HTTP trigger must never reopen CANCELLED or routed work.
+        # PostgreSQL claim functions also enforce this under a row lock.
+        if current["Status"] != "SUBMITTED":
+            return {
+                "accepted": False,
+                "reportId": str(report_id),
+                "reportNo": current["ReportNo"],
+                "businessStatus": current["Status"],
+                "agentStatus": agent_status,
+                "message": "Report is no longer eligible for initial Agent processing.",
+            }
         if agent_status == "COMPLETED":
             return {
                 "accepted": False,
@@ -205,7 +217,7 @@ def process_report(report_id: UUID) -> dict:
             # A background poller may have claimed the Report between the first
             # state read and this request. Return the actual durable state.
             return {
-                "accepted": updated_status == "PROCESSING",
+                "accepted": False,
                 "reportId": str(report_id),
                 "reportNo": updated["ReportNo"],
                 "agentStatus": updated_status,
@@ -213,7 +225,7 @@ def process_report(report_id: UUID) -> dict:
                 "message": (
                     "Report assessment is processing."
                     if updated_status == "PROCESSING"
-                    else "Report could not be claimed for Agent processing."
+                    else "Report was not claimed because it is no longer eligible or another worker owns it."
                 ),
             }
 
@@ -307,12 +319,29 @@ def procurement_clarification_draft(handoff_id: UUID, clarification_id: UUID) ->
 
 
 @app.post(
+    "/api/maintenance-reviews/{maintenance_review_id}/work-order/preview",
+    dependencies=[Depends(require_agent_api_key)],
+)
+def internal_work_order_preview(maintenance_review_id: UUID) -> dict:
+    """Preview the direct INTERNAL Work Order after human Maintenance Review."""
+    try:
+        return work_order_repository.build_draft_preview_for_review(
+            maintenance_review_id
+        )
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@app.post(
     "/api/procurement-outcomes/{procurement_outcome_id}/work-order/preview",
     dependencies=[Depends(require_agent_api_key)],
 )
-def work_order_preview(procurement_outcome_id: UUID) -> dict:
+def procurement_work_order_preview(procurement_outcome_id: UUID) -> dict:
+    """Preview the PROCUREMENT Work Order after the final outcome is recorded."""
     try:
-        return work_order_repository.build_draft_preview_for_outcome(procurement_outcome_id)
+        return work_order_repository.build_draft_preview_for_outcome(
+            procurement_outcome_id
+        )
     except Exception as exc:
         raise _http_error(exc) from exc
 

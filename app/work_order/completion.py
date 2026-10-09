@@ -7,17 +7,22 @@ from ..schemas import CompletionAssessmentResult, CompletionModelResponse
 from .prompts import COMPLETION_PROMPT_VERSION
 
 _FINAL_REVIEW_SENTENCE = (
-    "Visual comparison only; final completion acceptance remains with PPO Head."
+    "Visual comparison only; final completion acceptance remains with the Maintenance Supervisor."
 )
 _HIDDEN_LIMITATION = (
-    "Images cannot establish hidden repair quality, code compliance, or final completion acceptance."
+    "Images cannot establish hidden repair quality, safety, code compliance, installation quality, or final completion acceptance."
 )
 
 
 def planned_vs_actual(bundle) -> dict:
     def compare(label: str, planned, actual) -> dict:
         if planned is None or actual is None:
-            return {"label": label, "planned": planned, "actual": actual, "difference": None}
+            return {
+                "label": label,
+                "planned": planned,
+                "actual": actual,
+                "difference": None,
+            }
         return {
             "label": label,
             "planned": planned,
@@ -26,9 +31,21 @@ def planned_vs_actual(bundle) -> dict:
         }
 
     return {
-        "durationDays": compare("Duration days", bundle.planned_duration_days, bundle.actual_duration_days),
-        "crewSize": compare("Crew size", bundle.planned_crew_size, bundle.actual_crew_size),
-        "laborHours": compare("Labor hours", bundle.planned_labor_hours, bundle.actual_labor_hours),
+        "durationDays": compare(
+            "Duration days",
+            bundle.planned_duration_days,
+            bundle.actual_duration_days,
+        ),
+        "crewSize": compare(
+            "Crew size",
+            bundle.planned_crew_size,
+            bundle.actual_crew_size,
+        ),
+        "laborHours": compare(
+            "Labor hours",
+            bundle.planned_labor_hours,
+            bundle.actual_labor_hours,
+        ),
         "plannedMaterialCount": len(bundle.planned_materials),
         "actualMaterialCount": len(bundle.actual_materials),
     }
@@ -43,28 +60,75 @@ def choose_visual_result(model: CompletionModelResponse) -> str:
         return "ADDITIONAL_CONCERN"
     if model.visible_issue_improved:
         return "VISIBLE_IMPROVEMENT"
-    return "PPO_REVIEW_REQUIRED"
+    return "SUPERVISOR_REVIEW_REQUIRED"
 
 
 def _normalize_authority_wording(value: str) -> str:
-    """Remove completion-authority wording while preserving visual observations."""
+    """Remove completion/safety authority wording while preserving visible observations."""
     text = " ".join(str(value).split())
+
     replacements = (
-        (r"(?i)\bthe repair is complete\b", "the visible repair appears improved"),
-        (r"(?i)\bthe work is complete\b", "the visible work appears improved"),
-        (r"(?i)\bwork is ready for inspection\b", "the visible result is ready for PPO Head review"),
-        (r"(?i)\brepair is ready for inspection\b", "the visible result is ready for PPO Head review"),
-        (r"(?i)\bthe repair is in the final stage of completion\b", "the visible repair appears substantially improved"),
+        (
+            r"(?i)\bthe repair is complete\b",
+            "the visible repair appears improved",
+        ),
+        (
+            r"(?i)\bthe work is complete\b",
+            "the visible work appears improved",
+        ),
+        (
+            r"(?i)\bwork is ready for inspection\b",
+            "the visible result is ready for Maintenance Supervisor review",
+        ),
+        (
+            r"(?i)\brepair is ready for inspection\b",
+            "the visible result is ready for Maintenance Supervisor review",
+        ),
+        (
+            r"(?i)\bthe repair is in the final stage of completion\b",
+            "the visible repair appears substantially improved",
+        ),
         (
             r"(?i)\bthe images? (?:are|is) sufficient to confirm the repair\b",
             "the images support a visible before/after comparison",
         ),
-        (r"(?i)\bconfirm(?:s|ed)? the repair\b", "supports the visible repair comparison"),
-        (r"(?i)\bthe repair has been completed\b", "the submitted image shows visible repair work"),
-        (r"(?i)\bthe work has been completed\b", "the submitted image shows visible work"),
+        (
+            r"(?i)\bconfirm(?:s|ed)? the repair\b",
+            "supports the visible repair comparison",
+        ),
+        (
+            r"(?i)\bthe repair has been completed\b",
+            "the submitted image shows visible repair work",
+        ),
+        (
+            r"(?i)\bthe work has been completed\b",
+            "the submitted image shows visible work",
+        ),
+        (
+            r"(?i)\bclean and safe\b",
+            "visibly cleaner; safety cannot be confirmed from images",
+        ),
+        (
+            r"(?i)\bproperly installed\b",
+            "appears installed in the submitted image",
+        ),
+        (
+            r"(?i)\bcorrectly installed\b",
+            "appears installed in the submitted image",
+        ),
+        (
+            r"(?i)\bis no longer damaged\b",
+            "no longer shows the previously visible damage in the submitted image",
+        ),
+        (
+            r"(?i)\bappears safe\b",
+            "appears visually improved; safety cannot be confirmed from images",
+        ),
     )
+
     for pattern, replacement in replacements:
         text = re.sub(pattern, replacement, text)
+
     return text.strip()
 
 
@@ -73,20 +137,29 @@ def _normalize_summary(summary: str) -> str:
     if _FINAL_REVIEW_SENTENCE.lower() not in text.lower():
         max_body = max(0, 500 - len(_FINAL_REVIEW_SENTENCE) - 1)
         text = text[:max_body].rstrip(" ,.;")
-        text = f"{text}. {_FINAL_REVIEW_SENTENCE}" if text else _FINAL_REVIEW_SENTENCE
+        text = (
+            f"{text}. {_FINAL_REVIEW_SENTENCE}"
+            if text
+            else _FINAL_REVIEW_SENTENCE
+        )
     return text[:500]
 
 
-def enforce_completion_human_authority(model: CompletionModelResponse) -> CompletionModelResponse:
+def enforce_completion_human_authority(
+    model: CompletionModelResponse,
+) -> CompletionModelResponse:
     """
-    PPO Head review is always mandatory in SEEFIX.
+    Maintenance Supervisor review is always mandatory in SEEFIX.
 
     The model may assess visible change, but it cannot declare the Work Order
-    complete or waive the human close-out gate. This post-processing makes the
-    persisted structured result deterministic even if the model phrases its
-    response too strongly.
+    complete, certify safety/compliance, or waive the human close-out gate.
+    Deterministic post-processing keeps the persisted result within that scope.
     """
-    limitations = [" ".join(str(item).split()) for item in model.limitations if str(item).strip()]
+    limitations = [
+        " ".join(str(item).split())
+        for item in model.limitations
+        if str(item).strip()
+    ]
     if not any("final completion" in item.lower() for item in limitations):
         limitations.append(_HIDDEN_LIMITATION)
 
@@ -99,7 +172,7 @@ def enforce_completion_human_authority(model: CompletionModelResponse) -> Comple
                 if str(item).strip()
             ][:8],
             "limitations": limitations[:8],
-            "needs_ppo_review": True,
+            "needs_maintenance_supervisor_review": True,
         }
     )
 
@@ -110,9 +183,13 @@ class CompletionAssessmentService:
 
     def assess(self, *, bundle, images: list[bytes]) -> CompletionAssessmentResult:
         started = time.perf_counter()
-        raw_model = self.provider.compare_completion(images=images, context=bundle.model_context())
+        raw_model = self.provider.compare_completion(
+            images=images,
+            context=bundle.model_context(),
+        )
         model = enforce_completion_human_authority(raw_model)
         elapsed_ms = round((time.perf_counter() - started) * 1000)
+
         return CompletionAssessmentResult(
             work_order_id=bundle.work_order_id,
             visual_result=choose_visual_result(model),

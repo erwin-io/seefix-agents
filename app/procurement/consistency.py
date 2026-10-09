@@ -62,7 +62,7 @@ def reconcile_field_inspection_requirement(
             text = pattern.sub("", text)
         text = re.sub(r"\s{2,}", " ", text).strip(" ,.;")
         if not positive:
-            suffix = "A field inspection is required before PPO Head finalizes any fact not established in the recorded SEEFIX evidence."
+            suffix = "A field inspection is required before the Maintenance Supervisor finalizes any fact not established in the recorded SEEFIX evidence."
             text = f"{text}. {suffix}" if text else suffix
 
     return text[:1800], required

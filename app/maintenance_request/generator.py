@@ -59,7 +59,7 @@ class MaintenanceRequestGenerator:
             )
             scope_of_work = (
                 f"Inspect and verify the reported visible condition: {assessment.summary} "
-                "Make the area safe as required, perform corrective maintenance within the PPO-approved scope, "
+                "Make the area safe as required, perform corrective maintenance within the Maintenance Office-reviewed scope, "
                 "and document the completed work and materials actually used."
             )
             safety_requirements = category_ref.safety_guidance or self._fallback_safety(result)
@@ -74,7 +74,7 @@ class MaintenanceRequestGenerator:
                 "Additional cautious Agent suggestions: " + ", ".join(additional_materials[:8]) + "."
             )
         material_notes_parts.append(
-            "Final material specification and quantity remain subject to qualified field inspection and Procurement/maintenance confirmation."
+            "Final material specification and quantity remain subject to qualified field inspection and Maintenance Office/Procurement confirmation."
         )
         preliminary_materials_notes = " ".join(material_notes_parts)
 

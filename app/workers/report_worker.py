@@ -114,8 +114,15 @@ class ReportWorker:
             flush=True,
         )
         try:
+            # A report may have been cancelled after the DB claim but before
+            # this worker picked the in-memory queue item.
+            if not self._still_eligible(claimed):
+                print(f"[AGENT WORKER] Skipping closed/cancelled {claimed.report_no}.", flush=True)
+                return
             bundle = self.repository.get_bundle(claimed.id)
             image_bytes = self._download(bundle.images[0].secure_url)
+            if not self._still_eligible(claimed):
+                return
             result = self.agent.analyze(image_bytes, report_context=bundle.prompt_context())
             context: AssessmentDatabaseContext | None = None
 
@@ -139,11 +146,24 @@ class ReportWorker:
                     duration_reference=duration_reference,
                 )
 
-            self.repository.complete_report(report_id=claimed.id, result=result, context=context)
+            saved_assessment = self.repository.complete_report(
+                report_id=claimed.id, attempt_count=claimed.attempt_count,
+                result=result, context=context,
+            )
+            if not saved_assessment:
+                print(f"[AGENT WORKER] Stale/cancelled attempt discarded: {claimed.report_no}.", flush=True)
+                return
 
             # A valid visual assessment always gets a DRAFT. Qwen second-pass failure
             # is handled internally by a deterministic fallback.
             if result.assessment is not None and context is not None:
+                # After completing assessment, status becomes PENDING_REVIEW.
+                # Avoid launching the expensive second-pass draft when a
+                # cancellation/review has already changed that state.
+                latest = self.repository.get_state(claimed.id)
+                if not latest or latest["Status"] != "PENDING_REVIEW":
+                    print(f"[AGENT WORKER] Draft skipped after report state change: {claimed.report_no}.", flush=True)
+                    return
                 try:
                     saved = self.maintenance_request_workflow.generate_for_report(
                         report_id=claimed.id,
@@ -168,9 +188,20 @@ class ReportWorker:
             print(f"[AGENT WORKER] FAILED {claimed.report_no}: {str(exc)[:700]}", flush=True)
             traceback.print_exc()
             try:
-                self.repository.fail_report(report_id=claimed.id, error=str(exc))
+                self.repository.fail_report(
+                    report_id=claimed.id, attempt_count=claimed.attempt_count,
+                    error=str(exc),
+                )
             except Exception as save_error:
                 print(f"[AGENT WORKER] Unable to store FAILED state: {str(save_error)[:500]}", flush=True)
+
+    def _still_eligible(self, claimed: ClaimedReport) -> bool:
+        state = self.repository.get_state(claimed.id)
+        return bool(
+            state and state["Status"] == "SUBMITTED"
+            and state["AgentStatus"] == "PROCESSING"
+            and int(state["AgentAttemptCount"]) == claimed.attempt_count
+        )
 
     @staticmethod
     def _duration_reference(context: AssessmentDatabaseContext) -> str | None:

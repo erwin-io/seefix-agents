@@ -10,7 +10,11 @@ from urllib.request import Request, urlopen
 
 from pydantic import BaseModel, ValidationError
 
-from ..inspection.prompts import SYSTEM_PROMPT as INSPECTION_SYSTEM_PROMPT, build_user_prompt
+from ..inspection.prompts import (
+    SYSTEM_PROMPT as INSPECTION_SYSTEM_PROMPT,
+    VISUAL_RECHECK_PROMPT,
+    build_user_prompt,
+)
 from ..json_utils import extract_json_object
 from ..maintenance_request.prompts import SYSTEM_PROMPT as MAINTENANCE_SYSTEM_PROMPT, build_prompt as build_maintenance_prompt
 from ..schemas import (
@@ -83,12 +87,12 @@ class OllamaProvider:
         )
 
     def draft_procurement_clarification(self, context: dict) -> ProcurementClarificationModelDraft:
-        system_prompt = """You draft a PPO-reviewable response to a Procurement clarification using only recorded SEEFIX facts.
+        system_prompt = """You draft a Maintenance-Supervisor-reviewable response to a Procurement clarification using only recorded SEEFIX facts.
 Do not invent field observations, silently change scope, approve Procurement, select providers, or make authoritative engineering certifications.
 Identify uncertainty and set the structured field field_inspection_required=true when recorded facts cannot answer safely.
 Do not write field_inspection_required=true/false or any other schema field assignment inside response_draft.
 If the prose says a field inspection is required, the structured field must also be true. If the prose explicitly says no field inspection is required, the structured field must be false.
-The response is a draft only; PPO Head reviews and sends the final response.
+The response is a draft only; the Maintenance Supervisor reviews and sends the final response.
 Return JSON only matching the supplied schema."""
         return self._structured(
             output_model=ProcurementClarificationModelDraft,
@@ -174,22 +178,44 @@ Return JSON only matching the supplied schema."""
         if first_validation_error is None:  # pragma: no cover - defensive
             raise ProviderError("Structured-output validation failed without a captured validation error.")
 
-        # The repair pass deliberately does NOT resend the image, original
-        # task, or database context. The schema and previous JSON are enough
-        # to repair syntax/shape, while omitting duplicated material prevents
-        # the corrective request from overflowing the context window.
-        repair_prompt = self._build_repair_prompt(
-            invalid_content=content,
-            validation_error=first_validation_error,
-        )
-        repair_payload = self._build_payload(
-            schema=schema,
-            system_prompt=REPAIR_SYSTEM_PROMPT,
-            user_prompt=repair_prompt,
-            encoded_images=[],
-        )
+        if (
+            output_model is ModelInspectionResponse
+            and encoded_images
+            and self._is_inspection_scope_conflict(first_validation_error)
+        ):
+            # A Facility Issue with a NULL assessment is a *semantic* conflict,
+            # not malformed JSON. Image-free repair cannot decide if the photo
+            # shows a real defect. Reinspect the original image once, without
+            # the reporter's potentially incorrect description or the previous
+            # malformed response. Never silently convert the decision to NO_ACTION.
+            print(
+                f"[{label}] Scope/assessment conflict; reinspecting image once.",
+                flush=True,
+            )
+            repair_payload = self._build_payload(
+                schema=schema,
+                system_prompt=INSPECTION_SYSTEM_PROMPT,
+                user_prompt=VISUAL_RECHECK_PROMPT,
+                encoded_images=encoded_images,
+            )
+            repair_label = f"{label} VISUAL RECHECK"
+        else:
+            # Ordinary JSON syntax/shape repairs are image-free to keep cost
+            # and context use bounded. These repairs cannot change image facts.
+            repair_prompt = self._build_repair_prompt(
+                invalid_content=content,
+                validation_error=first_validation_error,
+            )
+            repair_payload = self._build_payload(
+                schema=schema,
+                system_prompt=REPAIR_SYSTEM_PROMPT,
+                user_prompt=repair_prompt,
+                encoded_images=[],
+            )
+            repair_label = f"{label} JSON REPAIR"
+
         repaired_body = self._chat(repair_payload)
-        self._print_timing(repaired_body, label=f"{label} REPAIR")
+        self._print_timing(repaired_body, label=repair_label)
         repaired_content = self._extract_content(repaired_body)
         try:
             return self._validate_content(repaired_content, output_model)
@@ -198,6 +224,14 @@ Return JSON only matching the supplied schema."""
                 "Ollama returned structured output that failed SEEFIX validation after one corrective attempt. "
                 f"Initial: {str(first_validation_error)[:500]}. Repair: {str(repair_error)[:500]}"
             ) from repair_error
+
+    @staticmethod
+    def _is_inspection_scope_conflict(validation_error: Exception) -> bool:
+        error = str(validation_error)
+        return (
+            "assessment is required for a visible facility issue" in error
+            or "assessment must be null when no assessment is appropriate" in error
+        )
 
     def _build_payload(
         self,

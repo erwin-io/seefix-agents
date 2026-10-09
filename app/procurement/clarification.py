@@ -6,7 +6,7 @@ from ..repositories.procurement import ProcurementRepository
 from ..schemas import ProcurementClarificationDraft
 from .consistency import reconcile_field_inspection_requirement
 
-CLARIFICATION_PROMPT_VERSION = "procurement-clarification-v2-consistent-field-inspection"
+CLARIFICATION_PROMPT_VERSION = "procurement-clarification-v3-maintenance-supervisor"
 
 
 class ProcurementClarificationService:
@@ -36,7 +36,7 @@ class ProcurementClarificationService:
                 f"Recorded SEEFIX scope: {mr['scopeOfWork']} "
                 f"Required service: {mr['requiredService']} "
                 "The available record does not establish facts beyond the submitted image assessment and approved request. "
-                "PPO Head should confirm any scope detail that requires field inspection before sending a final response."
+                "The Maintenance Supervisor should confirm any scope detail that requires field inspection before sending a final response."
             )
             uncertainties = ["The clarification could not be fully answered from recorded SEEFIX facts alone."]
             field_required = True

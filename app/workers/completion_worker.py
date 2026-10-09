@@ -82,7 +82,7 @@ class CompletionWorker:
             completion_images = [self._download(url) for url in bundle.completion_image_urls[:4]]
             result = self.service.assess(bundle=bundle, images=[original, *completion_images])
             self.repository.complete_completion_assessment(result)
-            print(f"[COMPLETION WORKER] Assessed {work_order_no}; PPO Head review still required.", flush=True)
+            print(f"[COMPLETION WORKER] Assessed {work_order_no}; Maintenance Supervisor review still required.", flush=True)
         except Exception as exc:
             print(f"[COMPLETION WORKER] FAILED {work_order_no}: {str(exc)[:700]}", flush=True)
             traceback.print_exc()

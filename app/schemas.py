@@ -43,6 +43,11 @@ class ScopeDecision(str, Enum):
     INSUFFICIENT_IMAGE = "Insufficient Image"
 
 
+class WorkOrderRouteType(str, Enum):
+    INTERNAL = "INTERNAL"
+    PROCUREMENT = "PROCUREMENT"
+
+
 class ScopeValidation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -138,7 +143,7 @@ class ModelAssessment(BaseModel):
         ]
         limitations = [self.limitation] if self.limitation else []
         follow_up_questions = (
-            ["Can PPO staff inspect and confirm the affected area?"]
+            ["Can Maintenance Office staff inspect and confirm the affected area?"]
             if self.needs_review
             else []
         )
@@ -228,7 +233,7 @@ class CategoryReference(BaseModel):
     default_required_capability: str | None = None
     safety_guidance: str | None = None
     preferred_trade: str | None = None
-    requires_ppo_review: bool = False
+    requires_maintenance_review: bool = False
 
 
 class SkillReference(BaseModel):
@@ -460,14 +465,18 @@ class WorkOrderDraftPreview(BaseModel):
 
     report_id: UUID
     maintenance_request_id: UUID
-    procurement_outcome_id: UUID
-    status: str = "PENDING_CONFIRMATION"
+    maintenance_review_id: UUID
+    route_type: WorkOrderRouteType
+    procurement_outcome_id: UUID | None = None
+    status: str = "PENDING_ASSIGNMENT"
     execution_type: str
-    assigned_party_name: str
+    assigned_party_name: str | None = None
     responsible_lead_user_id: UUID | None = None
     responsible_lead_name: str | None = None
     responsible_lead_contact: str | None = None
     responsible_lead_email: str | None = None
+    assigned_by: UUID | None = None
+    assigned_at: str | None = None
     planned_start_at: str | None = None
     deadline: str | None = None
     planned_duration_days: float | None = None
@@ -494,7 +503,7 @@ class CompletionModelResponse(BaseModel):
     summary: str = Field(min_length=5, max_length=500)
     observed_changes: list[str] = Field(default_factory=list, max_length=8)
     limitations: list[str] = Field(default_factory=list, max_length=8)
-    needs_ppo_review: bool
+    needs_maintenance_supervisor_review: bool
 
 
 class CompletionAssessmentResult(BaseModel):

@@ -16,6 +16,18 @@ class MaintenanceRequestRepository:
     def save_draft(self, *, report_id: UUID, draft: MaintenanceRequestDraftResult) -> dict:
         """Create/update exactly one DRAFT per Report; never overwrite an authorized request."""
         with self.database.connect(row_factory=dict_row) as conn, conn.cursor() as cur:
+            # Same parent lock order as Reporter cancellation and human review.
+            # Rechecking under FOR UPDATE stops a late Agent DRAFT from
+            # appearing after a cancellation has committed.
+            cur.execute(
+                'SELECT "Status" FROM "dbo"."Reports" WHERE "Id"=%s FOR UPDATE',
+                (report_id,),
+            )
+            report = cur.fetchone()
+            if report is None:
+                raise LookupError("Report was not found.")
+            if report["Status"] != "PENDING_REVIEW":
+                raise ValueError("Maintenance Request DRAFT is not allowed for this report state.")
             cur.execute(
                 'SELECT * FROM "dbo"."MaintenanceRequests" WHERE "ReportId"=%s FOR UPDATE',
                 (report_id,),

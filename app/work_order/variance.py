@@ -14,9 +14,11 @@ def _compare_range(
 ) -> None:
     if planned is None or estimated_min is None or estimated_max is None:
         return
+
     e_min = float(estimated_min)
     e_max = float(estimated_max)
     p = float(planned)
+
     if p < e_min or p > e_max:
         items.append(
             WorkOrderVarianceItem(
@@ -24,7 +26,8 @@ def _compare_range(
                 severity="WARNING",
                 message=(
                     f"{label} ({p:g}) is outside the preliminary Maintenance Request estimate "
-                    f"({e_min:g}-{e_max:g}). Field/Procurement information may be more complete; review rather than auto-reject."
+                    f"({e_min:g}-{e_max:g}). Field, assignment, or Procurement information "
+                    "may be more complete; review rather than auto-reject."
                 ),
                 estimated_min=e_min,
                 estimated_max=e_max,
@@ -46,6 +49,7 @@ def _compare_range(
 
 def calculate_work_order_variance(context: dict) -> WorkOrderVarianceResult:
     items: list[WorkOrderVarianceItem] = []
+
     _compare_range(
         items,
         field="durationDays",
@@ -70,6 +74,7 @@ def calculate_work_order_variance(context: dict) -> WorkOrderVarianceResult:
         planned=context.get("plannedLaborHours"),
         label="Planned labor hours",
     )
+
     return WorkOrderVarianceResult(
         items=items,
         has_warnings=any(item.severity == "WARNING" for item in items),

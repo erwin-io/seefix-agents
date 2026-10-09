@@ -4686,10 +4686,13 @@
 |-- run_windows.bat
 |-- scripts
     |-- verify_database_contract.py
+    |-- __pycache__
+        |-- verify_database_contract.cpython-312.pyc
 |-- tests
     |-- test_core.py
     |-- test_database_contract_optional.py
     |-- test_hardening.py
+    |-- test_no_visible_scope_recheck.py
     |-- __init__.py
     |-- __pycache__
         |-- test_core.cpython-310.pyc
@@ -4697,5 +4700,6 @@
         |-- test_database_contract_optional.cpython-310.pyc
         |-- test_database_contract_optional.cpython-312.pyc
         |-- test_hardening.cpython-312.pyc
+        |-- test_no_visible_scope_recheck.cpython-310.pyc
         |-- __init__.cpython-310.pyc
         |-- __init__.cpython-312.pyc

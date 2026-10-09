@@ -216,7 +216,14 @@ class ReportRepository:
             0.0,
             (datetime.now(timezone.utc) - bundle.created_at).total_seconds() / 86400.0,
         )
-        duplicates = self._get_duplicate_candidates(bundle=bundle, category=category)
+        duplicate_lookback_days = self._get_setting_int(
+            "AgentDuplicateLookbackDays", self.duplicate_lookback_days
+        )
+        duplicates = self._get_duplicate_candidates(
+            bundle=bundle,
+            category=category,
+            lookback_days=duplicate_lookback_days,
+        )
         return AssessmentDatabaseContext(
             recurrence_count=recurrence_count,
             is_recurring=recurrence_count >= recurrence_threshold,
@@ -236,9 +243,16 @@ class ReportRepository:
     def _get_setting_int(self, key: str, fallback: int) -> int:
         try:
             with self.database.connect() as conn, conn.cursor() as cur:
-                cur.execute('SELECT "dbo"."GetSettingInt"(%s, %s)', (key, fallback))
+                cur.execute(
+                    """
+                    SELECT ("Value" #>> '{}')::INTEGER
+                    FROM "dbo"."SystemSettings"
+                    WHERE "Key"=%s
+                    """,
+                    (key,),
+                )
                 row = cur.fetchone()
-                return max(1, int(row[0] if row else fallback))
+                return max(1, int(row[0] if row and row[0] is not None else fallback))
         except Exception:
             return fallback
 
@@ -249,7 +263,7 @@ class ReportRepository:
                 SELECT "Id", "Code", "Name", "Description", "DefaultUrgency",
                        "UrgencyGuidance", "DefaultMinHours", "DefaultMaxHours",
                        "DefaultRequiredService", "DefaultRequiredCapability",
-                       "SafetyGuidance", "PreferredTrade", "RequiresPpoReview"
+                       "SafetyGuidance", "PreferredTrade", "RequiresMaintenanceReview"
                 FROM "dbo"."DamageCategories"
                 WHERE "Name" = %s AND "IsActive" = TRUE
                 ''',
@@ -267,7 +281,7 @@ class ReportRepository:
             default_required_service=row["DefaultRequiredService"],
             default_required_capability=row["DefaultRequiredCapability"],
             safety_guidance=row["SafetyGuidance"], preferred_trade=row["PreferredTrade"],
-            requires_ppo_review=bool(row["RequiresPpoReview"]),
+            requires_maintenance_review=bool(row["RequiresMaintenanceReview"]),
         )
 
     def get_skill_references(self, category_id: UUID) -> list[SkillReference]:
@@ -359,10 +373,11 @@ class ReportRepository:
         *,
         bundle: ReportBundle,
         category: FacilityCategory,
+        lookback_days: int,
     ) -> list[DuplicateCandidate]:
         if not bundle.building:
             return []
-        start_at = bundle.created_at - timedelta(days=self.duplicate_lookback_days)
+        start_at = bundle.created_at - timedelta(days=lookback_days)
         with self.database.connect(row_factory=dict_row) as conn, conn.cursor() as cur:
             cur.execute(
                 '''
@@ -488,9 +503,10 @@ class ReportRepository:
         self,
         *,
         report_id: UUID,
+        attempt_count: int,
         result: InspectionResult,
         context: AssessmentDatabaseContext | None,
-    ) -> None:
+    ) -> bool:
         assessment = result.assessment
         priority = result.priority
         policy = result.policy
@@ -522,6 +538,7 @@ class ReportRepository:
                     "ProcessedWidth"=%s, "ProcessedHeight"=%s,
                     "AiProcessingTimeMs"=%s, "AssessmentJson"=%s
                 WHERE "Id"=%s AND "AgentStatus"='PROCESSING'
+                  AND "Status"='SUBMITTED' AND "AgentAttemptCount"=%s
                 RETURNING "ReportNo", "AgentAttemptCount", "ReporterId", "AgentCompletedAt"
                 ''',
                 (
@@ -556,12 +573,45 @@ class ReportRepository:
                     result.original_width, result.original_height,
                     result.processed_width, result.processed_height,
                     result.processing_time_ms,
-                    Jsonb(result.model_dump(mode="json")), report_id,
+                    Jsonb(result.model_dump(mode="json")), report_id, attempt_count,
                 ),
             )
             row = cur.fetchone()
             if row is None:
-                raise RuntimeError("Unable to complete report because it is no longer PROCESSING.")
+                # Cancellation or stale re-claim won. Never write results from
+                # an obsolete Agent attempt or overwrite a cancelled report.
+                return False
+
+            # The revised database keeps ReportAssessmentHistory as an explicit
+            # audit table. Persist the completed attempt in the same transaction
+            # instead of relying on the removed legacy archive trigger.
+            cur.execute(
+                """
+                INSERT INTO "dbo"."ReportAssessmentHistory"
+                ("ReportId","AgentAttemptCount","AnalysisStatus","ScopeDecision",
+                 "AiCategory","AiRawRecommendedUrgency","AiRecommendedUrgency",
+                 "PriorityScore","AiProvider","AiModelId","AiPromptVersion",
+                 "AiPolicyVersion","AssessmentJson","ProcessingTimeMs")
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT ("ReportId","AgentAttemptCount") DO NOTHING
+                """,
+                (
+                    report_id,
+                    int(row["AgentAttemptCount"]),
+                    result.analysis_status.value,
+                    result.scope_validation.decision.value,
+                    assessment.category.value if assessment else None,
+                    policy.raw_urgency.value if policy else None,
+                    policy.effective_urgency.value if policy else None,
+                    priority.total if priority else None,
+                    result.provider,
+                    result.model_id,
+                    result.prompt_version,
+                    policy.policy_version if policy else None,
+                    Jsonb(result.model_dump(mode="json")),
+                    result.processing_time_ms,
+                ),
+            )
 
             if context:
                 for candidate in context.duplicate_candidates:
@@ -616,8 +666,9 @@ class ReportRepository:
                     dedupe,
                 ),
             )
+        return True
 
-    def fail_report(self, *, report_id: UUID, error: str) -> None:
+    def fail_report(self, *, report_id: UUID, attempt_count: int, error: str) -> None:
         message = str(error).strip()[:2000]
         with self.database.connect(row_factory=dict_row) as conn, conn.cursor() as cur:
             cur.execute(
@@ -625,10 +676,11 @@ class ReportRepository:
                 UPDATE "dbo"."Reports"
                 SET "AgentStatus"='FAILED', "AgentCompletedAt"=NOW(),
                     "AgentLastError"=%s, "AgentNextRetryAt"=NULL
-                WHERE "Id"=%s
+                WHERE "Id"=%s AND "AgentStatus"='PROCESSING'
+                  AND "Status"='SUBMITTED' AND "AgentAttemptCount"=%s
                 RETURNING "ReportNo", "AgentAttemptCount"
                 ''',
-                (message, report_id),
+                (message, report_id, attempt_count),
             )
             row = cur.fetchone()
             if row:

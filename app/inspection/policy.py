@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from ..schemas import AgentAssessment, CategoryReference, FacilityCategory, PolicyResult, Urgency
 
-POLICY_VERSION = "facility-policy-v1"
+POLICY_VERSION = "facility-policy-v2-maintenance-office"
 
 _URGENCY_RANK = {
     Urgency.LOW: 1,
@@ -98,11 +98,11 @@ def apply_urgency_policy(
 
     if assessment.category == FacilityCategory.OTHER_UNCERTAIN:
         needs_review = True
-        reasons.append("Other or Uncertain always requires PPO review.")
+        reasons.append("Other or Uncertain always requires Maintenance Supervisor review.")
 
-    if category_reference and category_reference.requires_ppo_review:
+    if category_reference and category_reference.requires_maintenance_review:
         needs_review = True
-        reasons.append("DamageCategories reference requires PPO review.")
+        reasons.append("DamageCategories reference requires Maintenance Office review.")
 
     # The policy never downgrades the model recommendation.
     effective = _max_urgency(raw, effective)
