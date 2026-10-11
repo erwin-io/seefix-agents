@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import threading
 import time
 import unittest
@@ -14,6 +15,10 @@ from unittest import mock
 from uuid import uuid4
 
 import psycopg
+
+# app.config validates at import; CI has no .env. Placeholders only; nothing here connects.
+os.environ.setdefault("DATABASE_URL", "postgresql://test@127.0.0.1:1/test")
+os.environ.setdefault("SEEFIX_AGENT_API_KEY", "test-only")
 
 from app.database import Database, DatabaseError
 from app.workers.backoff import LoopBackoff
