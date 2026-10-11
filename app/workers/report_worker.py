@@ -12,6 +12,7 @@ from ..remote_image import download_remote_image
 from ..repositories.reports import ClaimedReport, ReportRepository
 from ..schemas import AssessmentDatabaseContext
 from ..scoring import PriorityContext
+from .backoff import LoopBackoff
 
 
 class ReportWorker:
@@ -33,6 +34,7 @@ class ReportWorker:
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._backoff = LoopBackoff("AGENT WORKER", settings.agent_poll_seconds)
 
     @property
     def is_running(self) -> bool:
@@ -79,15 +81,15 @@ class ReportWorker:
         while not self._stop_event.is_set():
             try:
                 claimed = self._next_claim()
+                self._backoff.succeeded()
                 if claimed is None:
                     self._wake_event.wait(timeout=self.settings.agent_poll_seconds)
                     self._wake_event.clear()
                     continue
                 self._process(claimed)
             except Exception as exc:
-                print(f"[AGENT WORKER] Worker loop error: {str(exc)[:500]}", flush=True)
-                traceback.print_exc()
-                self._wake_event.wait(timeout=self.settings.agent_poll_seconds)
+                # Thread stays alive; claims resume on their own once PostgreSQL is reachable (#5).
+                self._wake_event.wait(timeout=self._backoff.failed(exc))
                 self._wake_event.clear()
 
     def _next_claim(self) -> ClaimedReport | None:
