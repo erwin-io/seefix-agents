@@ -237,6 +237,14 @@ The old `PPO_STAFF`, `PPO_HEAD`, and `STAFF` role names are no longer part of th
 
 Remote Report/Work Order images require HTTPS, an approved host, no credentials in the URL, approved redirect destinations, supported image MIME type, configured size limits, and Pillow validation. Default approved host: `res.cloudinary.com`.
 
+## PostgreSQL connectivity troubleshooting
+
+`[COMPLETION WORKER]` or `[AGENT WORKER]` logs `Unable to connect to PostgreSQL: connection timeout expired`. What to check:
+
+1. `GET http://127.0.0.1:8000/health` shows `components.database.reachable`. When it is `false`, `status` is `degraded`. If `ollama.reachable` is still `true`, the problem is the database, not the model. An HTTP `202` from `POST /api/reports/{id}/process` only means the request was accepted, not that analysis finished.
+2. Find the host and port in `DATABASE_URL` **without printing it**. A database on this PC (`127.0.0.1`/`localhost`) does not depend on Wi-Fi: check the PostgreSQL process with `Test-NetConnection 127.0.0.1 -Port 5432`. For a hosted database, run `Resolve-DnsName <host>` and `Test-NetConnection <host> -Port <port>`. After a network switch, also check VPN, proxy, firewall and the provider's IP allowlist, since your public IP changes with the network. Use a DNS name, not a temporary IP.
+3. No restart and no `.env` change are needed once the database is reachable again. Both workers stay alive during an outage and retry with backoff (poll interval doubling to 60 s). They print one traceback, then a line at 2, 4, 8… consecutive failures, then `Recovered after N failed attempt(s).` They resume claiming pending work automatically. A polling timeout never marks a Report or Work Order `FAILED`.
+
 ## Validation
 
 At minimum run:
