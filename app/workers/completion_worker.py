@@ -7,6 +7,7 @@ from ..config import Settings
 from ..remote_image import download_remote_image
 from ..repositories.work_orders import WorkOrderRepository
 from ..work_order.completion import CompletionAssessmentService
+from .backoff import LoopBackoff
 
 
 class CompletionWorker:
@@ -23,6 +24,7 @@ class CompletionWorker:
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._backoff = LoopBackoff("COMPLETION WORKER", settings.completion_poll_seconds)
 
     @property
     def is_running(self) -> bool:
@@ -64,15 +66,15 @@ class CompletionWorker:
         while not self._stop_event.is_set():
             try:
                 claimed = self.repository.claim_next_pending_completion()
+                self._backoff.succeeded()
                 if claimed is None:
                     self._wake_event.wait(timeout=self.settings.completion_poll_seconds)
                     self._wake_event.clear()
                     continue
                 self._process(claimed.id, claimed.work_order_no)
             except Exception as exc:
-                print(f"[COMPLETION WORKER] Loop error: {str(exc)[:500]}", flush=True)
-                traceback.print_exc()
-                self._wake_event.wait(timeout=self.settings.completion_poll_seconds)
+                # Thread stays alive; claims resume on their own once PostgreSQL is reachable (#5).
+                self._wake_event.wait(timeout=self._backoff.failed(exc))
                 self._wake_event.clear()
 
     def _process(self, work_order_id, work_order_no: str) -> None:
