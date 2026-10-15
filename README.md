@@ -2,6 +2,60 @@
 
 SEEFIX is a local/on-premises AI-assisted maintenance prioritization and workflow-assistance service. This revision targets the redesigned 2026-10-08 PostgreSQL `dbo` contract in which the Maintenance Department reviews the prioritized queue and routes each actionable maintenance request either directly to internal maintenance or to Procurement.
 
+## Prerequisites
+
+| Tool | Version | Notes |
+|---|---|---|
+| Git | any | to clone the repo |
+| Python | 3.12 (`py -3.12 --version`) | python.org installer on Windows, with the `py` launcher |
+| Ollama | current | `winget install Ollama.Ollama` (Windows) or ollama.com |
+| Vision model | `qwen3-vl:2b-instruct-q4_K_M` (~2 GB) | pulled in step 2; a GPU helps but isn't required |
+| SEEFIX database | PostgreSQL / Neon | the **same** database as seefix-api; set it up first ([seefix-api README](https://github.com/seefixmanagement/seefix-api#setup-step-by-step)) |
+
+## Setup (step by step, Windows)
+
+1. **Clone and create the virtual environment**
+   ```powershell
+   git clone https://github.com/seefixmanagement/seefix-agents.git
+   cd seefix-agents
+   py -3.12 -m venv .venv
+   .venv\Scripts\python.exe -m pip install -r requirements.txt
+   ```
+   On Linux/macOS: `python3.12 -m venv .venv` and `.venv/bin/python -m pip install -r requirements.txt`.
+2. **Get the model** (Ollama must be running; the installer starts it):
+   ```powershell
+   ollama pull qwen3-vl:2b-instruct-q4_K_M
+   ```
+3. **Configure `.env`**
+   ```powershell
+   copy .env.example .env
+   ```
+   | Variable | Value |
+   |---|---|
+   | `DATABASE_URL` | the seefix-api database. For Neon: the pooled host with `?sslmode=require` |
+   | `SEEFIX_DATABASE_SSLMODE` | `prefer` for local PostgreSQL, `require` for Neon |
+   | `SEEFIX_AGENT_API_KEY` | a new random value (`python -c "import secrets; print(secrets.token_urlsafe(48))"`); seefix-api's `LOCAL_AGENT_SECRET` must be identical. Never reuse the sample value |
+   | `SEEFIX_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` |
+
+   The other settings have working defaults.
+4. **Check the database contract** (read-only):
+   ```powershell
+   .venv\Scripts\python.exe scriptserify_database_contract.py
+   ```
+5. **Start**
+   ```powershell
+   run_windows.bat
+   ```
+   or `.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000`.
+6. **Check** `http://127.0.0.1:8000/health`: `"status":"ok"`, database and ollama `reachable:true`,
+   `modelAvailable:true`. The Agent now claims pending reports and completions from the database every ~3 s.
+7. **Connect seefix-api**: set its `LOCAL_AGENT_URL` (`http://127.0.0.1:8000` on the same machine) and
+   `LOCAL_AGENT_SECRET`, then restart the API. Its `/health` should show `agent.reachable:true`.
+
+For an always-on AI host (Windows services with NSSM, and a public HTTPS address with Tailscale Funnel so a hosted
+API can reach the Agent), follow
+[seefix-api docs/SYSTEM_SETUP.md § 4](https://github.com/seefixmanagement/seefix-api/blob/main/docs/SYSTEM_SETUP.md#4-ai-host-windows--machine).
+
 ## Core rule
 
 **AI assesses, prioritizes, retrieves bounded knowledge, drafts, compares, warns, and monitors. Human-authorized roles still make routing, assignment, Procurement, and final completion decisions.**
@@ -245,12 +299,12 @@ Remote Report/Work Order images require HTTPS, an approved host, no credentials 
 2. Find the host and port in `DATABASE_URL` **without printing it**. A database on this PC (`127.0.0.1`/`localhost`) does not depend on Wi-Fi: check the PostgreSQL process with `Test-NetConnection 127.0.0.1 -Port 5432`. For a hosted database, run `Resolve-DnsName <host>` and `Test-NetConnection <host> -Port <port>`. After a network switch, also check VPN, proxy, firewall and the provider's IP allowlist, since your public IP changes with the network. Use a DNS name, not a temporary IP.
 3. No restart and no `.env` change are needed once the database is reachable again. Both workers stay alive during an outage and retry with backoff (poll interval doubling to 60 s). They print one traceback, then a line at 2, 4, 8… consecutive failures, then `Recovered after N failed attempt(s).` They resume claiming pending work automatically. A polling timeout never marks a Report or Work Order `FAILED`.
 
-## Validation
+## Tests
 
-At minimum run:
-
-```cmd
-python -m compileall app
+```powershell
+.venv\Scripts\python.exe -m compileall app
+.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
-Then run the project's current unit/integration tests after updating any test assertions that still reference the old PPO role names, `PENDING_CONFIRMATION`, `CONFIRMED`, or `needs_ppo_review`.
+The database contract tests are skipped by default. Run them only against a known SEEFIX test database by setting
+`SEEFIX_RUN_DB_TESTS=true`.
