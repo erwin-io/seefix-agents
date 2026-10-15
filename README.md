@@ -180,6 +180,33 @@ A separate `WorkOrders.CompletionAgentStatus` queue retrieves the original Repor
 
 The Agent never sets `WorkOrders.Status = COMPLETED`. `needs_maintenance_supervisor_review` is deterministically forced to `true` because final completion/rework remains a Maintenance Supervisor responsibility.
 
+A result or failure is written only by the attempt that still owns the claim (`CompletionAgentAttemptCount`) and only
+while the Work Order is still `COMPLETION_SUBMITTED`. A stale or requeued attempt, or one that finishes after the
+supervisor decided, is discarded.
+
+### Role-scoped assistant (Web Admin V2)
+
+`POST /api/assistant/respond` phrases a short answer from facts that seefix-api's own RBAC-checked tools returned.
+The Agent has no tools, no database access and no actions on this path.
+
+- **Request:** `role` (five internal roles only), `question`, and up to 40 `facts` (`id`, `kind`, `label`, `data` up to
+  4 KB, optional in-app `navigation` path).
+- **Response:** `status` (`ANSWERED`, `NO_FACTS` or `FALLBACK`), `answer`, `citedFactIds`, `navigation`,
+  `fallbackReason`.
+- **Checks on the model's output:**
+  - Citations must be supplied fact ids.
+  - Links come only from the API's facts.
+  - URLs in the model's text are removed.
+  - Any extra field (action, SQL, tool call) produces a deterministic `FALLBACK`.
+- **The model is never required.** When it is down, busy or invalid, the answer is a plain list of the records found.
+
+Every Ollama call goes through one `InferenceGate`:
+
+- Report and completion jobs always take the next free slot.
+- A chat runs only when no job is waiting. It gives up after `SEEFIX_ASSISTANT_QUEUE_WAIT_SECONDS` and is limited to
+  `SEEFIX_ASSISTANT_TIMEOUT_SECONDS`.
+- At most `SEEFIX_ASSISTANT_MAX_WAITING` chats can wait at once.
+
 ## Database contract
 
 Target the redesigned SEEFIX database schema for 2026-10-08.
@@ -239,6 +266,8 @@ POST /api/work-orders/{work_order_id}/review
 
 POST /api/work-orders/{work_order_id}/completion/process
 GET  /api/work-orders/{work_order_id}/completion/status
+
+POST /api/assistant/respond
 
 POST /api/monitor/run
 ```
@@ -308,3 +337,7 @@ Remote Report/Work Order images require HTTPS, an approved host, no credentials 
 
 The database contract tests are skipped by default. Run them only against a known SEEFIX test database by setting
 `SEEFIX_RUN_DB_TESTS=true`.
+
+The queue-fence tests (`tests/test_queue_fences_db.py`) run the real claim and write SQL and triggers inside one
+transaction that is rolled back. They run only when `SEEFIX_TEST_DATABASE_URL` points at a disposable localhost copy,
+for example `postgresql://postgres:<password>@127.0.0.1/seefix_v2_dev`.

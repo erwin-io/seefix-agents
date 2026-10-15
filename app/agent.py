@@ -7,6 +7,7 @@ from .image_utils import prepare_image
 from .inspection.policy import apply_urgency_policy
 from .inspection.prompts import PROMPT_VERSION
 from .providers import OllamaProvider
+from .providers.gate import InferenceGate
 from .schemas import AnalysisStatus, CategoryReference, InspectionResult
 from .scoring import PriorityContext, calculate_priority
 
@@ -23,6 +24,10 @@ class FacilityInspectionAgent:
             model_context=settings.model_context,
             max_output_tokens=settings.model_max_output_tokens,
             keep_alive=settings.model_keep_alive,
+            gate=InferenceGate(
+                slots=settings.inference_slots,
+                max_waiting_interactive=settings.assistant_max_waiting,
+            ),
         )
 
     def analyze(

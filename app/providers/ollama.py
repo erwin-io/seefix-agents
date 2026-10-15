@@ -25,7 +25,8 @@ from ..schemas import (
     ProviderAnalysis,
 )
 from ..work_order.prompts import COMPLETION_SYSTEM_PROMPT, build_completion_prompt
-from .base import ProviderError
+from .base import InvalidModelOutput, ProviderError
+from .gate import InferenceGate
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -57,6 +58,7 @@ class OllamaProvider:
         model_context: int,
         max_output_tokens: int,
         keep_alive: str,
+        gate: InferenceGate | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model_id = model
@@ -64,6 +66,8 @@ class OllamaProvider:
         self.model_context = model_context
         self.max_output_tokens = max_output_tokens
         self.keep_alive = keep_alive
+        # One gate per host process; every /api/chat call passes through it.
+        self.gate = gate or InferenceGate()
 
     def analyze(self, image_bytes: bytes, *, report_context: dict | None = None) -> ProviderAnalysis:
         result = self._structured(
@@ -286,7 +290,37 @@ PREVIOUS JSON:
 {invalid_text}
 """
 
-    def _chat(self, payload: dict) -> dict:
+    def answer_assistant(
+        self,
+        *,
+        output_model: type[T],
+        system_prompt: str,
+        user_prompt: str,
+        timeout_seconds: int,
+        wait_seconds: float,
+        max_output_tokens: int,
+    ) -> T:
+        """Low-priority text-only call: no repair pass, so an invalid answer falls back instead of retrying."""
+        payload = self._build_payload(
+            schema=self._compact_schema(output_model.model_json_schema()),
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            encoded_images=[],
+        )
+        payload["options"]["num_predict"] = max_output_tokens
+        body = self._chat(payload, interactive_wait=wait_seconds, timeout_seconds=timeout_seconds)
+        self._print_timing(body, label="OLLAMA ASSISTANT")
+        try:
+            return self._validate_content(self._extract_content(body), output_model)
+        except (TypeError, ValueError, ValidationError) as exc:
+            raise InvalidModelOutput(f"Assistant output failed validation: {str(exc)[:300]}") from exc
+
+    def _chat(self, payload: dict, *, interactive_wait: float | None = None, timeout_seconds: int | None = None) -> dict:
+        slot = self.gate.job() if interactive_wait is None else self.gate.interactive(interactive_wait)
+        with slot:
+            return self._chat_ungated(payload, timeout_seconds or self.timeout_seconds)
+
+    def _chat_ungated(self, payload: dict, timeout_seconds: int) -> dict:
         # Work on a copy because context auto-expansion must not mutate the
         # caller's payload or leak into later requests.
         request_payload = copy.deepcopy(payload)
@@ -299,7 +333,7 @@ PREVIOUS JSON:
                 method="POST",
             )
             try:
-                with urlopen(request, timeout=self.timeout_seconds) as response:
+                with urlopen(request, timeout=timeout_seconds) as response:
                     raw = response.read().decode("utf-8")
                 body = json.loads(raw)
                 if not isinstance(body, dict):
@@ -340,7 +374,7 @@ PREVIOUS JSON:
                     f"Cannot connect to Ollama at {self.base_url}. Make sure the local Ollama service is running."
                 ) from exc
             except TimeoutError as exc:
-                raise ProviderError(f"Ollama exceeded the {self.timeout_seconds}-second timeout.") from exc
+                raise ProviderError(f"Ollama exceeded the {timeout_seconds}-second timeout.") from exc
             except json.JSONDecodeError as exc:
                 raise ProviderError("Ollama returned an invalid JSON API envelope.") from exc
 

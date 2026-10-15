@@ -217,7 +217,14 @@ class WorkOrderRepository:
         )
 
 
-    def complete_completion_assessment(self, result: CompletionAssessmentResult) -> None:
+    # Late-result fence: only the attempt that still owns the claim, and only while the Work Order still awaits
+    # completion review, may write. A stale/requeued attempt or a supervisor decision wins (seefix-agents#7).
+    _CLAIM_FENCE = (
+        """"CompletionAgentStatus"='PROCESSING' AND "Status"='COMPLETION_SUBMITTED'"""
+        """ AND "CompletionAgentAttemptCount"=%s"""
+    )
+
+    def complete_completion_assessment(self, result: CompletionAssessmentResult, *, attempt_count: int) -> bool:
         with self.database.connect(row_factory=dict_row) as conn, conn.cursor() as cur:
             cur.execute(
                 """
@@ -227,7 +234,7 @@ class WorkOrderRepository:
                   "CompletionAssessmentJson"=%s,"CompletionAiProvider"=%s,
                   "CompletionAiModelId"=%s,"CompletionAiPromptVersion"=%s,
                   "CompletionAiProcessingTimeMs"=%s
-                WHERE "Id"=%s AND "CompletionAgentStatus"='PROCESSING'
+                WHERE "Id"=%s AND """ + self._CLAIM_FENCE + """
                 RETURNING "WorkOrderNo","CompletionAgentAttemptCount"
                 """,
                 (
@@ -238,13 +245,12 @@ class WorkOrderRepository:
                     result.prompt_version,
                     result.processing_time_ms,
                     result.work_order_id,
+                    attempt_count,
                 ),
             )
             row = cur.fetchone()
             if row is None:
-                raise RuntimeError(
-                    "Unable to persist completion assessment; queue claim is no longer PROCESSING."
-                )
+                return False
 
             dedupe = (
                 f"work_order:{result.work_order_id}:completion:"
@@ -316,8 +322,9 @@ class WorkOrderRepository:
                     notification_key,
                 ),
             )
+        return True
 
-    def fail_completion(self, *, work_order_id: UUID, error: str) -> None:
+    def fail_completion(self, *, work_order_id: UUID, attempt_count: int, error: str) -> None:
         message = str(error).strip()[:2000]
         with self.database.connect(row_factory=dict_row) as conn, conn.cursor() as cur:
             cur.execute(
@@ -325,10 +332,10 @@ class WorkOrderRepository:
                 UPDATE "dbo"."WorkOrders" SET
                   "CompletionAgentStatus"='FAILED',"CompletionAgentCompletedAt"=NOW(),
                   "CompletionAgentLastError"=%s
-                WHERE "Id"=%s
+                WHERE "Id"=%s AND """ + self._CLAIM_FENCE + """
                 RETURNING "WorkOrderNo","CompletionAgentAttemptCount"
                 """,
-                (message, work_order_id),
+                (message, work_order_id, attempt_count),
             )
             row = cur.fetchone()
             if not row:

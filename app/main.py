@@ -10,6 +10,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.responses import FileResponse
 
 from .agent import FacilityInspectionAgent
+from .assistant.service import AssistantService
 from .config import settings
 from .database import Database
 from .maintenance_request.generator import MaintenanceRequestGenerator
@@ -20,6 +21,7 @@ from .repositories.maintenance_requests import MaintenanceRequestRepository
 from .repositories.procurement import ProcurementRepository
 from .repositories.reports import ReportRepository
 from .repositories.work_orders import WorkOrderRepository
+from .schemas import AssistantRequest
 from .work_order.completion import CompletionAssessmentService
 from .workers.completion_worker import CompletionWorker
 from .workers.report_worker import ReportWorker
@@ -76,6 +78,7 @@ work_order_repository = WorkOrderRepository(
     completion_worker_name=settings.completion_worker_name,
 )
 completion_service = CompletionAssessmentService(agent.provider)
+assistant_service = AssistantService(provider=agent.provider, settings=settings)
 report_worker = ReportWorker(
     settings=settings,
     repository=report_repository,
@@ -399,6 +402,15 @@ def completion_status(work_order_id: UUID) -> dict:
         }
     except Exception as exc:
         raise _http_error(exc) from exc
+
+
+@app.post(
+    "/api/assistant/respond",
+    dependencies=[Depends(require_agent_api_key)],
+)
+def assistant_respond(request: AssistantRequest) -> dict:
+    """Low-priority answer from facts seefix-api already authorized. No DB access, no actions; never 5xx on model failure."""
+    return assistant_service.respond(request).model_dump(mode="json", by_alias=True)
 
 
 @app.post(
