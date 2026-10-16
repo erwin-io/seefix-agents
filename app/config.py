@@ -134,6 +134,43 @@ class Settings:
     ).strip()
 
     # ---------------------------------------------------------
+    # Inference budget on the single Ollama host (seefix-agents#7)
+    #
+    # Queue jobs always go first; assistant chat only gets a slot
+    # when no report/completion job is waiting.
+    # ---------------------------------------------------------
+
+    inference_slots: int = _env_int(
+        "SEEFIX_INFERENCE_SLOTS",
+        1,
+        minimum=1,
+    )
+
+    assistant_timeout_seconds: int = _env_int(
+        "SEEFIX_ASSISTANT_TIMEOUT_SECONDS",
+        30,
+        minimum=1,
+    )
+
+    assistant_queue_wait_seconds: int = _env_int(
+        "SEEFIX_ASSISTANT_QUEUE_WAIT_SECONDS",
+        10,
+        minimum=0,
+    )
+
+    assistant_max_waiting: int = _env_int(
+        "SEEFIX_ASSISTANT_MAX_WAITING",
+        4,
+        minimum=1,
+    )
+
+    assistant_max_output_tokens: int = _env_int(
+        "SEEFIX_ASSISTANT_MAX_OUTPUT_TOKENS",
+        384,
+        minimum=64,
+    )
+
+    # ---------------------------------------------------------
     # Images
     # ---------------------------------------------------------
 

@@ -71,24 +71,28 @@ class CompletionWorker:
                     self._wake_event.wait(timeout=self.settings.completion_poll_seconds)
                     self._wake_event.clear()
                     continue
-                self._process(claimed.id, claimed.work_order_no)
+                self._process(claimed.id, claimed.work_order_no, claimed.attempt_count)
             except Exception as exc:
                 # Thread stays alive; claims resume on their own once PostgreSQL is reachable (#5).
                 self._wake_event.wait(timeout=self._backoff.failed(exc))
                 self._wake_event.clear()
 
-    def _process(self, work_order_id, work_order_no: str) -> None:
+    def _process(self, work_order_id, work_order_no: str, attempt_count: int) -> None:
         try:
             bundle = self.repository.get_completion_bundle(work_order_id)
             original = self._download(bundle.original_image_url)
             completion_images = [self._download(url) for url in bundle.completion_image_urls[:4]]
             result = self.service.assess(bundle=bundle, images=[original, *completion_images])
-            self.repository.complete_completion_assessment(result)
+            if not self.repository.complete_completion_assessment(result, attempt_count=attempt_count):
+                print(f"[COMPLETION WORKER] Stale/reviewed attempt discarded: {work_order_no}.", flush=True)
+                return
             print(f"[COMPLETION WORKER] Assessed {work_order_no}; Maintenance Supervisor review still required.", flush=True)
         except Exception as exc:
             print(f"[COMPLETION WORKER] FAILED {work_order_no}: {str(exc)[:700]}", flush=True)
             traceback.print_exc()
             try:
-                self.repository.fail_completion(work_order_id=work_order_id, error=str(exc))
+                self.repository.fail_completion(
+                    work_order_id=work_order_id, attempt_count=attempt_count, error=str(exc)
+                )
             except Exception as save_error:
                 print(f"[COMPLETION WORKER] Unable to store FAILED state: {str(save_error)[:500]}", flush=True)

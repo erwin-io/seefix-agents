@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic.alias_generators import to_camel
 
 
 class FacilityCategory(str, Enum):
@@ -515,5 +517,85 @@ class CompletionAssessmentResult(BaseModel):
     planned_vs_actual: dict[str, Any] = Field(default_factory=dict)
     provider: str
     model_id: str
+    prompt_version: str
+    processing_time_ms: int
+
+
+# ---------------------------------------------------------------------------
+# Role-scoped assistant (seefix-agents#7, seefix-api#21)
+#
+# seefix-api runs its vetted, RBAC-checked read tools and sends only their results as facts. The Agent has no
+# tools, no database access and no actions here; it only phrases an answer from those facts.
+# ---------------------------------------------------------------------------
+
+InternalRole = Literal["ADMIN", "MAINTENANCE_SUPERVISOR", "MAINTENANCE_STAFF", "PROCUREMENT", "WORKER"]
+MAX_FACT_DATA_BYTES = 4096
+
+
+class AssistantFact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^[a-z_]{1,40}:[A-Za-z0-9._:-]{1,80}$")
+    kind: str = Field(pattern=r"^[a-z_]{1,40}$")
+    label: str = Field(min_length=1, max_length=160)
+    data: dict[str, Any] = Field(default_factory=dict)
+    # In-app relative path chosen by the API; no scheme, host or protocol-relative "//".
+    navigation: str | None = Field(default=None, pattern=r"^/(?:[A-Za-z0-9_.?=&%-][A-Za-z0-9/_.?=&%-]{0,199})?$")
+
+    @field_validator("data")
+    @classmethod
+    def bounded_data(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8")) > MAX_FACT_DATA_BYTES:
+            raise ValueError(f"fact data must be at most {MAX_FACT_DATA_BYTES} bytes")
+        return value
+
+
+class AssistantRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: InternalRole
+    question: str = Field(min_length=1, max_length=1000)
+    facts: list[AssistantFact] = Field(default_factory=list, max_length=40)
+
+    @field_validator("facts")
+    @classmethod
+    def unique_fact_ids(cls, value: list[AssistantFact]) -> list[AssistantFact]:
+        if len({fact.id for fact in value}) != len(value):
+            raise ValueError("fact ids must be unique")
+        return value
+
+
+class AssistantModelAnswer(BaseModel):
+    """Everything the model may return. No action, SQL, URL or approval field exists to be filled."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str = Field(min_length=1, max_length=1500)
+    cited_fact_ids: list[str] = Field(default_factory=list, max_length=40)
+
+
+class AssistantStatus(str, Enum):
+    ANSWERED = "ANSWERED"
+    NO_FACTS = "NO_FACTS"
+    FALLBACK = "FALLBACK"
+
+
+class AssistantNavigation(BaseModel):
+    model_config = ConfigDict(extra="forbid", alias_generator=to_camel, populate_by_name=True)
+
+    fact_id: str
+    path: str
+    label: str
+
+
+class AssistantResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", alias_generator=to_camel, populate_by_name=True)
+
+    status: AssistantStatus
+    answer: str
+    cited_fact_ids: list[str]
+    navigation: list[AssistantNavigation]
+    fallback_reason: str | None = None
+    model: str | None = None
     prompt_version: str
     processing_time_ms: int

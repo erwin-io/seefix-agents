@@ -108,11 +108,11 @@ class CompletionWorkerOutageTests(unittest.TestCase):
         worker.repository.claim_next_pending_completion.side_effect = repo.claim
         worker.repository.requeue_stale_completion.side_effect = repo.requeue_stale_completion
         processed = []
-        worker._process = lambda wo_id, wo_no: processed.append(wo_id)
+        worker._process = lambda wo_id, wo_no, attempt: processed.append(wo_id)
         return fast(worker, "COMPLETION WORKER"), processed
 
     def test_recovers_after_outage_and_claims_exactly_once(self):
-        claim = SimpleNamespace(id=uuid4(), work_order_no="WO-1")
+        claim = SimpleNamespace(id=uuid4(), work_order_no="WO-1", attempt_count=1)
         repo = FlakyRepository(failures=12, claims=[claim])
         worker, processed = self.make(repo)
         log, running = run_until(worker, lambda: processed and repo.calls > 14)
