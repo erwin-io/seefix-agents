@@ -25,7 +25,7 @@ from app.assistant.prompts import SYSTEM_PROMPT as ASSISTANT_SYSTEM_PROMPT
 from app.assistant.service import AssistantService
 from app.providers import OllamaProvider, ProviderError
 from app.providers.gate import InferenceBusy, InferenceGate
-from app.schemas import AssistantRequest, AssistantResponse
+from app.schemas import AssistantModelAnswer, AssistantRequest, AssistantResponse
 from app.workers.completion_worker import CompletionWorker
 
 SETTINGS = SimpleNamespace(
@@ -130,6 +130,13 @@ class AssistantAnswerSafetyTests(unittest.TestCase):
                 self.assertEqual(out["fallbackReason"], "INVALID_MODEL_OUTPUT")
                 self.assertEqual(chat.call_count, 1, "no repair retry for chat")
                 self.assertEqual(set(out), RESPONSE_KEYS)
+
+    def test_model_schema_requires_citations(self):
+        # Ollama's structured output only forces required fields; qwen3-vl:2b dropped an optional
+        # cited_fact_ids, so every real answer was thrown away as UNGROUNDED_ANSWER.
+        schema = OllamaProvider._compact_schema(AssistantModelAnswer.model_json_schema())
+        self.assertIn("cited_fact_ids", schema["required"])
+        self.assertEqual(schema["properties"]["cited_fact_ids"]["minItems"], 1)
 
     def test_ungrounded_answer_falls_back(self):
         out, _ = answer({"answer": "There are 99 urgent reports in Building Z.", "cited_fact_ids": ["report:RPT-9999"]})

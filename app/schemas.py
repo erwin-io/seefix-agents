@@ -571,7 +571,8 @@ class AssistantModelAnswer(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     answer: str = Field(min_length=1, max_length=1500)
-    cited_fact_ids: list[str] = Field(default_factory=list, max_length=40)
+    # Required (no default) so the JSON schema sent to the model forces it; small models skip optional fields.
+    cited_fact_ids: list[str] = Field(min_length=1, max_length=40)
 
 
 class AssistantStatus(str, Enum):
